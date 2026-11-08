@@ -1,0 +1,176 @@
+{
+  "id": "miy.mc",
+  "name": "Minecraft",
+  "version": "0.1.0",
+  "description": "版本清单、版本解析、运行库下载、资源与启动",
+  "abi": 1,
+  "entry": "miy_mc.dll",
+  "concurrent": ["versions", "installed", "info", "mods", "mod", "mod.versions", "tasks", "task.cancel"],
+  "priority": 10,
+  "eager": true,
+  "contributes": {
+    "settings.schema": {
+      "root": {
+        "type": "string",
+        "title": "游戏目录",
+        "description": "版本、运行库与资源都保存在这里。留空时使用启动器所在目录下的 MC 文件夹。",
+        "default": "",
+        "group": "Minecraft",
+        "order": 0
+      },
+      "concurrency": {
+        "type": "int",
+        "title": "并行下载数",
+        "description": "同时进行的下载连接数。镜像按 IP 限速，默认 4；网络好可以调到 8。",
+        "min": 1,
+        "max": 16,
+        "default": 4,
+        "group": "Minecraft",
+        "order": 1
+      },
+      "manifest": {
+        "type": "enum",
+        "title": "版本清单来源",
+        "description": "镜像更新可能滞后一两天；新版本刚发布时如果列表里还没有，可以临时切到官方。",
+        "enum": ["镜像", "官方"],
+        "default": "镜像",
+        "group": "Minecraft",
+        "order": 2
+      },
+      "java": {
+        "type": "string",
+        "title": "Java 路径",
+        "description": "留空时自动选择合适的 Java；也可手动填写 java.exe 的路径或 Java 安装目录。",
+        "default": "",
+        "group": "Minecraft",
+        "order": 2
+      },
+      "javaAuto": {
+        "type": "bool",
+        "title": "自动下载 Java",
+        "description": "本机没有所需的 Java 时，自动下载并安装官方运行时（约 100 MB），保存在启动器目录下。关闭后需自行安装。",
+        "default": true,
+        "group": "Minecraft",
+        "order": 3
+      },
+      "memory": {
+        "type": "int",
+        "title": "内存分配",
+        "description": "分配给游戏的最大内存（MB）。整合包内容较多时可适当调高。",
+        "min": 512,
+        "max": 65536,
+        "step": 512,
+        "control": "slider",
+        "default": 2048,
+        "group": "Minecraft",
+        "order": 4
+      },
+      "chinese": {
+        "type": "bool",
+        "title": "自动设为中文",
+        "description": "首次启动时将游戏语言设为简体中文；玩家自行选择语言后不再修改。",
+        "default": true,
+        "group": "Minecraft",
+        "order": 5
+      },
+      "window": {
+        "type": "enum",
+        "title": "窗口模式",
+        "description": "全屏：强制全屏启动；跟随上次：沿用游戏内已保存的设置；窗口化：按下方宽高启动；与启动器同尺寸：使用启动器当前窗口大小。",
+        "enum": ["全屏", "跟随上次", "窗口化", "与启动器同尺寸"],
+        "default": "跟随上次",
+        "group": "Minecraft",
+        "order": 6
+      },
+      "width": {
+        "type": "int",
+        "title": "窗口宽度",
+        "description": "窗口化启动时使用的默认宽度。",
+        "min": 320,
+        "max": 7680,
+        "default": 854,
+        "group": "Minecraft",
+        "order": 7
+      },
+      "height": {
+        "type": "int",
+        "title": "窗口高度",
+        "description": "窗口化启动时使用的默认高度。",
+        "min": 240,
+        "max": 4320,
+        "default": 480,
+        "group": "Minecraft",
+        "order": 8
+      },
+      "gc": {
+        "type": "enum",
+        "title": "内存管理",
+        "description": "自动：按 Java 版本选择合适的内存管理方式；也可强制使用 G1GC，或保留游戏默认设置。",
+        "enum": ["自动", "G1GC（优化）", "仅 G1GC", "不指定"],
+        "default": "自动",
+        "group": "Minecraft",
+        "order": 9
+      },
+      "jvmArgs": {
+        "type": "string",
+        "title": "自定义 JVM 参数",
+        "description": "以空格分隔，双引号内的空格不会被拆分；支持占位符。填写 -Xmx 会覆盖上方的内存设置。",
+        "default": "",
+        "group": "Minecraft",
+        "order": 10
+      },
+      "gameArgs": {
+        "type": "string",
+        "title": "自定义游戏参数",
+        "description": "追加到游戏启动参数的末尾，占位符规则同上。",
+        "default": "",
+        "group": "Minecraft",
+        "order": 11
+      }
+    },
+    "ui.pages": [
+      {
+        "id": "home",
+        "title": "首页",
+        "slot": "home",
+        "entry": "home.html",
+        "order": 0
+      },
+      {
+        "id": "versions",
+        "title": "版本",
+        "slot": "nav",
+        "entry": "versions.html",
+        "order": 10
+      },
+      {
+        "id": "games",
+        "title": "游戏",
+        "slot": "nav",
+        "entry": "games.html",
+        "order": 20
+      },
+      {
+        "id": "mods",
+        "title": "模组",
+        "slot": "nav",
+        "entry": "mods.html",
+        "order": 30
+      },
+      {
+        "id": "detail",
+        "title": "版本详情",
+        "slot": "detail",
+        "entry": "detail.html",
+        "order": 90
+      },
+      {
+        "id": "modlist",
+        "title": "已装模组",
+        "slot": "detail",
+        "entry": "modlist.html",
+        "order": 91
+      }
+    ]
+  }
+}

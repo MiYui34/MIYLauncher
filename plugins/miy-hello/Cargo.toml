@@ -1,0 +1,12 @@
+[package]
+name = "miy-hello"
+description = "spike 用的最小插件：ping / echo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+miy-abi = { workspace = true }

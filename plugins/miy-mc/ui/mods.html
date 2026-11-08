@@ -1,0 +1,1072 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- miy.mc 的模组页：搜索 Modrinth、看详情、按版本安装。 -->
+<style>
+  :root{
+    --low:#f3f3fa; --lowest:#fff; --cont:#ededf4; --high:#e7e8ee;
+    --on:#191c20; --on-var:#44474e; --outline:#74777f; --outline-var:#c4c6d0;
+    --primary:#415f91; --on-primary:#fff;
+    --p-cont:#d6e3ff; --on-p-cont:#001b3e;
+    --s-cont:#dae2f9; --on-s-cont:#131c2b;
+    --ok:#146c2e; --err:#ba1a1a;
+    --font:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","Noto Sans SC",system-ui,sans-serif;
+    --e1:0 1px 2px rgba(16,24,40,.06);
+    --ease-std:cubic-bezier(.2,0,0,1);
+    --ease-dec:cubic-bezier(.05,.7,.1,1);
+    --d-short:120ms; --d-med:220ms; --d-long:320ms;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%; overflow:hidden}
+  @keyframes rowIn{from{opacity:0; transform:translateY(8px)} to{opacity:1; transform:none}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes shimmer{from{background-position:-320px 0} to{background-position:320px 0}}
+  body{
+    margin:0; background:var(--low); color:var(--on); font:400 14px/20px var(--font);
+    color-scheme:light; -webkit-font-smoothing:antialiased;
+    display:flex; flex-direction:column;
+  }
+  h1{margin:0 0 4px; font:400 22px/28px "Segoe UI Variable Display",var(--font); flex:0 0 auto}
+  .sub{color:var(--on-var); font-size:12px; margin-bottom:18px; flex:0 0 auto}
+
+  .bar{display:flex; gap:10px; align-items:center; margin-bottom:16px; flex-wrap:wrap; flex:0 0 auto}
+  .bar input[type=search]{flex:1 1 200px; min-width:160px}
+  .bar .dd{flex:0 0 auto}
+  input[type=search], input[type=text]{
+    flex:1 1 240px; min-width:180px; height:40px; padding:0 14px;
+    border:1px solid var(--outline); border-radius:10px; background:#fff; color:var(--on);
+    font:400 13.5px/20px var(--font); outline:none; appearance:none;
+    transition:border-color var(--d-short) var(--ease-std);
+  }
+  input[type=search]:focus, input[type=text]:focus{border-color:var(--primary); border-width:2px; padding:0 13px}
+  button{
+    background:transparent; color:var(--on); border:1px solid var(--outline-var);
+    border-radius:10px; height:40px; padding:0 18px; font:500 13px var(--font);
+    cursor:pointer; flex:0 0 auto;
+    transition:background var(--d-short) var(--ease-std), box-shadow var(--d-short) var(--ease-std),
+               transform var(--d-short) var(--ease-std);
+  }
+  button:hover:not(:disabled){background:var(--high)}
+  button:active:not(:disabled){transform:scale(.97)}
+  button.primary{background:var(--primary); color:var(--on-primary); border-color:transparent}
+  button.primary:hover:not(:disabled){box-shadow:0 2px 8px rgba(65,95,145,.26); background:var(--primary)}
+  button:disabled{opacity:.45; cursor:default; transform:none}
+
+  /* 自定义下拉（与其它页面同一套） */
+  .dd{position:relative; z-index:1; flex:0 0 auto}
+  .dd.open{z-index:80}
+  .dd-btn{
+    height:40px; min-width:132px; padding:0 32px 0 12px; border:1px solid var(--outline-var);
+    border-radius:10px; background:#fff; color:var(--on);
+    font:400 13px/20px var(--font); text-align:left; cursor:pointer; position:relative;
+    transition:border-color var(--d-short) var(--ease-std);
+  }
+  .dd-btn:hover{border-color:var(--on-var)}
+  .dd.open .dd-btn{border-color:var(--primary); border-width:2px; padding:0 31px 0 11px}
+  .dd-arrow{
+    position:absolute; right:12px; top:50%; width:8px; height:8px; margin-top:-6px;
+    border-right:1.8px solid var(--on-var); border-bottom:1.8px solid var(--on-var);
+    transform:rotate(45deg); transition:transform var(--d-short) var(--ease-std);
+  }
+  .dd.open .dd-arrow{transform:rotate(-135deg); margin-top:-2px}
+  .dd-menu{
+    position:absolute; top:calc(100% + 6px); left:0; min-width:100%; display:none; z-index:60;
+    background:#fff; border-radius:12px; padding:6px;
+    box-shadow:0 10px 28px rgba(16,24,40,.16), 0 2px 6px rgba(16,24,40,.08);
+    max-height:min(320px, 52vh); overflow-y:auto; overscroll-behavior:contain;
+    scrollbar-width:thin;
+  }
+  .dd-menu::-webkit-scrollbar{width:8px}
+  .dd-menu::-webkit-scrollbar-thumb{background:var(--outline); border-radius:4px}
+  .dd-menu::-webkit-scrollbar-track{background:transparent}
+  .dd.open .dd-menu{display:block}
+  /* 下面放不下时翻到按钮上方 */
+  .dd.up .dd-menu{top:auto; bottom:calc(100% + 6px)}
+  .dd-opt{
+    display:flex; width:100%; height:36px; padding:0 12px; border:0; border-radius:8px;
+    background:none; color:var(--on); font:400 13px/20px var(--font);
+    text-align:left; cursor:pointer; white-space:nowrap; align-items:center;
+  }
+  .dd-opt:hover{background:var(--high)}
+  .dd-opt.on{background:var(--s-cont); color:var(--on-s-cont)}
+
+  .list{
+    background:var(--lowest); border-radius:16px; overflow:auto; margin-bottom:16px;
+    box-shadow:var(--e1); flex:1 1 auto; min-height:120px;
+  }
+  .list{scrollbar-width:none}
+  .list::-webkit-scrollbar{width:0; height:0}
+  .m{
+    display:flex; align-items:center; gap:14px; padding:12px 18px; min-height:60px;
+    border-bottom:1px solid #eef0f6; animation:rowIn var(--d-long) var(--ease-dec) both;
+    cursor:pointer;
+  }
+  .m:last-child{border-bottom:0}
+  .m:hover{background:var(--cont)}
+  .m img{width:36px; height:36px; border-radius:9px; flex:0 0 auto; background:var(--cont)}
+  .ic{
+    position:relative; width:36px; height:36px; flex:0 0 auto; border-radius:9px;
+    background:var(--cont); color:var(--on-p-cont); display:grid; place-items:center;
+    font-size:15px; font-weight:600;
+  }
+  .ic img{position:absolute; inset:0; width:100%; height:100%; object-fit:cover; border-radius:inherit; background:#fff}
+  .ic.big{width:72px; height:72px; border-radius:18px; font-size:26px}
+  .m .left{display:flex; flex-direction:column; gap:2px; min-width:0; flex:1 1 auto}
+  .m .t .zh{margin-left:8px;font-size:12px;font-weight:500;color:var(--on-var);background:var(--low);border-radius:6px;padding:1px 6px;vertical-align:1px}
+.t{font-weight:500; font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .m .d{
+    color:var(--on-var); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .m .n{color:var(--on-var); font-size:11.5px; white-space:nowrap; flex:0 0 auto}
+  /* 「安装」被挤成两行的根因：按钮默认 flex-shrink:1 且不禁止换行 */
+  .m .go{
+    height:32px; padding:0 16px; font-size:12.5px; border-radius:16px;
+    color:var(--primary); border-color:var(--outline-var);
+    white-space:nowrap; flex:0 0 auto; min-width:72px;
+  }
+  .m .go:hover{background:var(--p-cont); color:var(--on-p-cont); border-color:transparent}
+  .empty{padding:32px 18px; color:var(--on-var); text-align:center; font-size:13px; line-height:22px}
+
+  /* 骨架屏：加载时占位而不是只留一句文字 */
+  .sk{padding:12px 18px; display:flex; align-items:center; gap:14px}
+  .sk i, .sk u, .sk b{
+    display:block; border-radius:8px; height:12px; text-decoration:none;
+    background:linear-gradient(90deg,#eceef5 25%,#f7f8fc 37%,#eceef5 63%);
+    background-size:640px 100%; animation:shimmer 1.1s linear infinite;
+  }
+  .sk i{width:36px; height:36px; border-radius:9px; flex:0 0 auto}
+  .sk .col{flex:1 1 auto; display:flex; flex-direction:column; gap:7px; min-width:0}
+  .sk u{width:46%}
+  .sk b{width:78%; height:10px; opacity:.75}
+  .sk s{width:72px; height:32px; border-radius:16px; flex:0 0 auto;
+    background:linear-gradient(90deg,#eceef5 25%,#f7f8fc 37%,#eceef5 63%);
+    background-size:640px 100%; animation:shimmer 1.1s linear infinite}
+
+  .spin{
+    width:14px; height:14px; border-radius:50%; flex:0 0 auto;
+    border:2px solid var(--outline-var); border-top-color:var(--primary);
+    animation:spin .7s linear infinite;
+  }
+  .status{
+    margin:0; flex:0 0 auto; padding:14px 18px; background:var(--lowest); border-radius:14px;
+    box-shadow:var(--e1); font:400 12.5px/18px var(--font); color:var(--on-var);
+    display:flex; align-items:center; gap:10px;
+  }
+  .status::before{
+    content:""; width:7px; height:7px; border-radius:50%; background:var(--outline); flex:0 0 auto;
+  }
+  .status.on::before{background:var(--ok)}
+  .status.bad::before{background:var(--err)}
+  .status.bad{color:var(--err)}
+  .status.busy::before{display:none}
+
+  /* 详情页 */
+  #detail{display:flex; flex-direction:column; flex:1 1 auto; min-height:0}
+  #detail[hidden]{display:none}
+  .back{
+    align-self:flex-start; height:34px; padding:0 14px; border-radius:17px; margin-bottom:12px;
+    font-size:12.5px; color:var(--on-var);
+  }
+  .dhead{display:flex; gap:14px; align-items:flex-start; margin-bottom:14px}
+  .dhead h2{margin:0 0 3px; font:500 18px/24px "Segoe UI Variable Display",var(--font)}
+  .dhead p{margin:0; color:var(--on-var); font-size:12.5px; line-height:19px}
+  .chips{display:flex; flex-wrap:wrap; gap:6px; margin-top:8px}
+  .chip{
+    height:22px; padding:0 9px; border-radius:11px; background:var(--cont); color:var(--on-var);
+    font-size:11px; line-height:22px; white-space:nowrap;
+  }
+  .chip.p{background:var(--p-cont); color:var(--on-p-cont)}
+  .dactions{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px}
+  .dsec{
+    display:flex; align-items:baseline; gap:8px; margin:0 2px 8px;
+    font:500 13px/18px var(--font); color:var(--on-var);
+  }
+  .dsec .muted{color:var(--outline); font-weight:400; font-size:11.5px}
+  .ver{
+    display:flex; align-items:center; gap:12px; padding:11px 18px; border-bottom:1px solid #eef0f6;
+    animation:rowIn var(--d-long) var(--ease-dec) both;
+  }
+  .ver:last-child{border-bottom:0}
+  .ver .vleft{display:flex; flex-direction:column; gap:2px; min-width:0; flex:1 1 auto}
+  .ver .vt{font-size:13px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .ver .vs{color:var(--on-var); font-size:11.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .ver .go{height:30px; padding:0 14px; font-size:12px; border-radius:15px; color:var(--primary);
+    border-color:var(--outline-var); white-space:nowrap; flex:0 0 auto}
+  .ver .go:hover{background:var(--p-cont); color:var(--on-p-cont); border-color:transparent}
+  /* 版本列表分栏：当前 MC 版本在前，其余在后 */
+  .vsec{
+    padding:9px 18px 7px; font-size:11.5px; font-weight:600; color:var(--on-var);
+    background:var(--low); border-bottom:1px solid #eef0f6; letter-spacing:.02em;
+  }
+  .pager{
+    display:flex; align-items:center; justify-content:center; gap:6px; flex-wrap:wrap;
+    padding:12px 0 4px; color:var(--on-var); font-size:12.5px;
+  }
+  .pager[hidden]{display:none}
+  .pstep, .pnum{
+    height:32px; min-width:32px; padding:0 10px; border-radius:16px; font-size:12.5px;
+    border:1px solid var(--outline-var); background:var(--lowest); color:var(--on-var);
+    cursor:pointer; transition:background .16s, color .16s, border-color .16s;
+  }
+  .pstep:hover:not(:disabled), .pnum:hover{background:var(--cont); color:var(--on)}
+  .pstep:disabled{opacity:.4; cursor:default}
+  .pnum.on{background:var(--s-cont); color:var(--on-s-cont); border-color:transparent; font-weight:600}
+  .pnums{display:flex; gap:6px; align-items:center}
+  .gap{color:var(--outline); padding:0 2px}
+  .pjump{display:flex; align-items:center; gap:6px; margin-left:10px}
+  .pjump input{
+    width:56px; height:32px; padding:0 8px; border-radius:8px; text-align:center;
+    border:1px solid var(--outline-var); background:var(--lowest); color:var(--on); font:inherit;
+  }  .dsec{display:flex; align-items:center; gap:10px}
+  .dfilters{margin-left:auto; display:flex; gap:8px}
+  .dfilters .dd-btn{height:30px; padding:0 10px; font-size:12px; border-radius:15px}
+  .mchips{display:flex; flex-wrap:wrap; gap:6px; padding:0 0 10px}
+  .mchips[hidden]{display:none}
+  .mchip{
+    height:28px; padding:0 12px; border-radius:14px; font-size:12.5px; cursor:pointer;
+    background:var(--lowest); color:var(--on-var); border:1px solid var(--outline-var);
+    transition:background .16s, color .16s, border-color .16s;
+  }
+  .mchip:hover{background:var(--cont)}
+  .mchip.on{background:var(--s-cont); color:var(--on-s-cont); border-color:transparent; font-weight:600}
+  [hidden]{display:none !important}
+  .seg{display:flex; gap:2px; padding:2px; background:var(--cont); border-radius:10px; flex:0 0 auto}
+  .seg button{height:32px; padding:0 12px; border:none; background:transparent; border-radius:8px;
+    font:inherit; font-size:13px; color:var(--on-var); cursor:pointer}
+  .seg button.on{background:#fff; color:var(--on); box-shadow:var(--e1)}
+  .fab{
+    position:fixed; right:22px; bottom:22px; width:52px; height:52px; border-radius:16px;
+    background:var(--primary); color:#fff; border:none; box-shadow:0 8px 22px rgba(65,95,145,.34);
+    display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:600;
+    cursor:pointer; z-index:60;
+    opacity:0; transform:translateY(14px) scale(.86); pointer-events:none;
+    transition:opacity .18s var(--ease-dec), transform .24s var(--ease-dec), filter .15s linear;
+  }
+  .fab.on{opacity:1; transform:none; pointer-events:auto}
+  .fabpanel{position:fixed; right:22px; bottom:86px; width:280px; padding:12px 14px;
+    background:#fff; border-radius:16px; box-shadow:0 12px 32px rgba(25,28,32,.18);
+    border:1px solid #ececf4; z-index:40}
+  .fabpanel[hidden]{display:none}
+  .fp-head{font-size:13px; font-weight:600; margin-bottom:8px}
+  .fp-list{display:flex; flex-direction:column; gap:8px; max-height:220px; overflow:auto}
+  .fp-row{display:flex; align-items:center; gap:8px; font-size:12.5px}
+  .fp-nm{flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .fp-pct{color:var(--on-var); font-variant-numeric:tabular-nums}
+  .fp-empty{font-size:12.5px; color:var(--on-var)}
+  .fp-row button{height:28px; padding:0 10px; font-size:12px}
+  .fab:hover{filter:brightness(1.06)}
+</style>
+
+<div id="list-view" style="display:flex; flex-direction:column; flex:1 1 auto; min-height:0">
+  <h1>模组</h1>
+  <div class="sub" id="sub">从 Modrinth 搜索并安装模组</div>
+
+  <div class="bar">
+    <input type="search" id="q" placeholder="搜索模组，例如 sodium、jei…" autocomplete="off">
+    <div class="dd" id="srcddd"></div>
+    <div class="dd" id="lddd"></div>
+    <div class="dd" id="tddd"></div>
+    <button class="primary" id="search">搜索</button>
+  </div>
+
+  <div class="list" id="list">
+    <div class="empty">输入关键词开始搜索。<br>装模组前请先在「版本」页安装一个游戏版本。</div>
+  </div>
+  <div class="pager" id="pager" hidden>
+    <button class="pstep" id="pprev">上一页</button>
+    <span class="pnums" id="pnums"></span>
+    <button class="pstep" id="pnext">下一页</button>
+    <span class="pjump">
+      跳到 <input type="number" id="pinput" min="1" value="1"> 页
+      <button class="pstep" id="pgo">前往</button>
+    </span>
+  </div>
+  <p class="status" id="status">模组会安装到当前版本的 mods 文件夹。</p>
+
+</div>
+
+<div id="detail" hidden>
+  <button class="back" id="back">返回</button>
+  <div class="dhead">
+    <div class="ic big" id="dicon"></div>
+    <div style="min-width:0">
+      <h2 id="dtitle">&nbsp;</h2>
+      <p id="ddesc"></p>
+      <div class="chips" id="dchips"></div>
+    </div>
+  </div>
+  <div class="dactions">
+    <button class="primary" id="goto">转到 Modrinth</button>
+    <button id="mcmod">在 MC 百科搜索</button>
+    <button id="copy">复制模组名称</button>
+  </div>
+  <div class="dsec">可用版本 <span class="muted" id="dcount"></span>
+    <span class="dfilters"><span class="dd" id="dld"></span></span>
+  </div>
+  <div class="mchips" id="dmcs"></div>
+  <div class="list" id="dlist"></div>
+</div>
+
+<div class="fabpanel" id="fabpanel" hidden>
+  <div class="fp-head">正在下载</div>
+  <div class="fp-list" id="fplist"></div>
+</div>
+<button class="fab" id="fab" title="下载任务">
+  <span class="fab-n" id="fabn">0</span>
+</button>
+
+<script>
+  const $ = s => document.querySelector(s);
+  const log = (s, kind) => {
+    const p = $("#status");
+    p.replaceChildren();
+    if (kind === "busy") p.append(Object.assign(document.createElement("i"), { className: "spin" }));
+    p.append(document.createTextNode(s));
+    p.className = "status" + (kind ? " " + kind : "");
+  };
+
+  /* 与其它页面同一套自定义下拉 */
+  function dd(el, items, cur, onPick) {
+    el.replaceChildren();
+    el.classList.remove("open");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "dd-btn";
+    const txt = document.createElement("span");
+    const first = items.find(i => i.value === cur) || items[0];
+    txt.textContent = first ? first.label : "";
+    const arrow = document.createElement("i");
+    arrow.className = "dd-arrow";
+    btn.append(txt, arrow);
+    const menu = document.createElement("div");
+    menu.className = "dd-menu";
+    for (const it of items) {
+      const o = document.createElement("button");
+      o.type = "button";
+      o.className = "dd-opt" + (it.value === cur ? " on" : "");
+      o.textContent = it.label;
+      o.onclick = (e) => {
+        e.stopPropagation();
+        txt.textContent = it.label;
+        for (const c of menu.children) c.classList.toggle("on", c === o);
+        el.classList.remove("open");
+        onPick(it.value);
+      };
+      menu.append(o);
+    }
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      for (const d of document.querySelectorAll(".dd.open")) if (d !== el) d.classList.remove("open");
+      const open = el.classList.toggle("open");
+      if (open) {
+        // 菜单默认往下弹；下面放不下就翻到上面，还放不下就压高度。
+        el.classList.remove("up");
+        menu.style.maxHeight = "";
+        const r = menu.getBoundingClientRect();
+        if (r.bottom > window.innerHeight - 8) {
+          el.classList.add("up");
+          const room = btn.getBoundingClientRect().top - 14;
+          if (room < r.height) menu.style.maxHeight = Math.max(96, room) + "px";
+        }
+      }
+    };
+    el.append(btn, menu);
+  }
+  document.addEventListener("click", () => {
+    for (const d of document.querySelectorAll(".dd.open")) d.classList.remove("open");
+  });
+
+  const LOADERS = [
+    { value: "", label: "全部加载器" },
+    { value: "fabric", label: "Fabric" },
+    { value: "quilt", label: "Quilt" },
+    { value: "neoforge", label: "NeoForge" },
+    { value: "forge", label: "Forge" },
+  ];
+  let loader = "";
+  dd($("#lddd"), LOADERS, loader, v => { loader = v; searchFromFirst(); });
+
+  /* 当前版本：目录名（可能带加载器后缀）同时用于过滤和安装目标 */
+  let curVersion = "";   // 版本目录名
+  let mcVersion = "";    // MC 版本号
+  let customDir = "";     // 用户自己选的安装目录（空 = 装进版本目录）
+  let targetLabel = "";
+
+  function targetItems() {
+    const items = installed.map(v => ({ value: v.id, label: v.id + (v.mc && v.mc !== v.id ? "（" + v.mc + "）" : "") }));
+    items.push({ value: "__pick__", label: "选择其他文件夹…" });
+    return items;
+  }
+
+  function refreshTarget() {
+    const items = targetItems();
+    const cur = customDir ? "__pick__" : curVersion;
+    dd($("#tddd"), items, cur, v => {
+      if (v === "__pick__") { pickDir(); return; }
+      customDir = "";
+      curVersion = v;
+      const hit = installed.find(x => x.id === v);
+      mcVersion = (hit && (hit.mc || hit.id)) || v;
+      targetLabel = "安装到：" + v;
+      $("#sub").textContent = targetLabel;
+    });
+    targetLabel = customDir ? "安装到：" + customDir : (curVersion ? "安装到：" + curVersion : "尚未选择安装位置");
+    $("#sub").textContent = targetLabel;
+  }
+
+  async function pickDir() {
+    try {
+      const r = await miy.call("miy.app.pickFolder", {}, 60000);
+      if (r && r.path) {
+        customDir = r.path;
+        refreshTarget();
+        log("模组会装到 " + customDir + "。", "on");
+      }
+    } catch (e) {
+      log("没能打开文件夹选择框。", "bad");
+    }
+  }
+
+  let installed = [];
+  /* 从版本详情页跳过来时带 `?name=<版本目录名>`：优先用这个版本，而不是
+     「列表里第一个能跑的版本」——否则用户明明在 26.3 里点进来，装到的却是别的版本。 */
+  function queryName() {
+    const raw = window.__MiyQuery || "";
+    const m = /(?:^|&)name=([^&]*)/.exec(raw);
+    if (!m) return "";
+    try { return decodeURIComponent(m[1]); } catch (e) { return m[1]; }
+  }
+  async function loadGame() {
+    try {
+      const r = await miy.call("miy.mc.installed", {}, 15000);
+      installed = (r && r.versions) || [];
+      const want = queryName();
+      let pick = want ? installed.find(v => v.id === want) : null;
+      if (!pick && want) {
+        // 列表里没有（比如刚装完还没刷新）：直接问这个版本自己。
+        try {
+          const vi = await miy.call("miy.mc.verinfo", { id: want }, 8000);
+          if (vi && vi.ok) pick = { id: want, mc: vi.mc || want, runnable: true };
+        } catch (e) { /* 忽略：退回默认版本 */ }
+      }
+      const runnable = pick || installed.find(v => v.runnable) || installed[0];
+      if (runnable) {
+        curVersion = runnable.id || "";
+        mcVersion = runnable.mc || runnable.id || "";
+      }
+      refreshTarget();
+    } catch (e) {
+      $("#sub").textContent = "从 Modrinth 搜索并安装模组";
+    }
+  }
+
+  let source = "all";
+  const SOURCES = [
+    { value: "all", label: "全部来源" },
+    { value: "modrinth", label: "Modrinth" },
+    { value: "curseforge", label: "CurseForge" },
+  ];
+  dd($("#srcddd"), SOURCES, source, v => {
+    source = v;
+    page = 1;
+    searchFromFirst();
+  });
+
+  const num = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(0) + "k" : String(n || 0);
+  const kb = n => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+
+  /* 加载动画：先铺骨架行，再来真数据 */
+  function skeleton(box, n) {
+    const rows = [];
+    for (let i = 0; i < n; i++) {
+      const r = document.createElement("div");
+      r.className = "sk";
+      const a = document.createElement("i");
+      const col = document.createElement("div");
+      col.className = "col";
+      const t = document.createElement("u");
+      const b = document.createElement("b");
+      col.append(t, b);
+      const s = document.createElement("s");
+      r.append(a, col, s);
+      r.style.animationDelay = i * 60 + "ms";
+      rows.push(r);
+    }
+    box.replaceChildren(...rows);
+  }
+
+  function iconInto(el, title, url, big) {
+    el.replaceChildren();
+    el.textContent = (title || "?").trim().charAt(0).toUpperCase();
+    if (!url) return;
+    const img = document.createElement("img");
+    img.src = url;
+    img.loading = "lazy";
+    img.onerror = () => img.remove();
+    el.append(img);
+  }
+
+  function row(h, i) {
+    const row = document.createElement("div");
+    row.className = "m";
+    row.title = "查看详情";
+    // 图标位永远占住：先铺一个首字母方块，图片加载成功再盖上去。
+    const ic = document.createElement("div");
+    ic.className = "ic";
+    iconInto(ic, h.title, h.icon);
+    const left = document.createElement("div");
+    left.className = "left";
+    const t = document.createElement("div");
+    t.className = "t";
+    t.textContent = h.title;
+    // 常见模组补一个中文名，方便中文玩家认。
+    if (h.zh && h.zh !== h.title) {
+      const z = document.createElement("span");
+      z.className = "zh";
+      z.textContent = h.zh;
+      t.append(z);
+    }
+    const d = document.createElement("div");
+    d.className = "d";
+    d.textContent = h.desc || "";
+    left.append(t, d);
+
+    const n = document.createElement("span");
+    n.className = "n";
+    n.textContent = num(h.downloads) + " 次下载";
+
+    row.append(ic, left, n);
+    row.onclick = () => openDetail(h);
+    if (i !== undefined) row.style.animationDelay = Math.min(i, 10) * 18 + "ms";
+    return row;
+  }
+
+  let running = 0;
+  let pollTimer = 0;
+
+  function bumpFab() {
+    $("#fabn").textContent = String(running);
+    // 用 class 而不是 hidden：hidden 会让过渡直接失效，球是「啪」地出现。
+    $("#fab").classList.toggle("on", running > 0);
+    if (running > 0) startPoll(); else stopPoll();
+  }
+
+  /* 任务面板：列出正在跑的下载，每条带一个「取消」。 */
+  async function refreshTasks() {
+    let list = [];
+    try {
+      const r = await miy.call("miy.mc.tasks", {}, 8000);
+      list = ((r && r.tasks) || []).filter(t => t.state === "running" || t.state === "cancelling");
+    } catch (e) { list = []; }
+    const box = $("#fplist");
+    if (!box) return;
+    box.replaceChildren();
+    if (!list.length) {
+      box.append(Object.assign(document.createElement("div"),
+        { className: "fp-empty", textContent: "没有正在进行的下载。" }));
+      return;
+    }
+    for (const t of list) {
+      const row = document.createElement("div");
+      row.className = "fp-row";
+      const nm = document.createElement("div");
+      nm.className = "fp-nm";
+      nm.textContent = t.title || "下载任务";
+      const pct = document.createElement("div");
+      pct.className = "fp-pct";
+      pct.textContent = t.state === "cancelling" ? "正在取消…" : (t.percent || 0) + "%";
+      const b = document.createElement("button");
+      b.className = "quiet";
+      b.textContent = t.state === "cancelling" ? "取消中" : "取消";
+      b.disabled = t.state !== "running";
+      b.onclick = async () => {
+        b.disabled = true;
+        b.textContent = "取消中";
+        try { await miy.call("miy.mc.task.cancel", { id: t.id }, 15000); } catch (e) {}
+        refreshTasks();
+      };
+      row.append(nm, pct, b);
+      box.append(row);
+    }
+  }
+
+  function startPoll() {
+    if (pollTimer) return;
+    pollTimer = setInterval(() => { refreshTasks().catch(() => {}); }, 900);
+    refreshTasks().catch(() => {});
+  }
+  function stopPoll() {
+    if (!pollTimer) return;
+    clearInterval(pollTimer);
+    pollTimer = 0;
+  }
+
+  $("#fab").onclick = () => {
+    const p = $("#fabpanel");
+    p.hidden = !p.hidden;
+    if (!p.hidden) refreshTasks().catch(() => {});
+  };
+
+  async function install(h, btn, vid) {
+    if (btn) { btn.disabled = true; btn.textContent = "安装中"; }
+    running++;
+    bumpFab();
+    log("正在安装 " + h.title + "…", "busy");
+    try {
+      const req = { id: h.id, mc: mcVersion, loader, target: customDir ? "" : curVersion };
+      if (customDir) req.dir = customDir;
+      if (vid) req.vid = vid;
+      const isCf = String(h.id || "").startsWith("cf:");
+      const r = await miy.call(isCf ? "miy.mc.cf.install" : "miy.mc.mod.install", req, 300000);
+      if (r && r.ok) {
+        if (btn) btn.textContent = "已安装";
+        log(h.title + " 已安装到 " + (customDir || curVersion || "mods") + "。", "on");
+        return;
+      }
+      if (btn) { btn.disabled = false; btn.textContent = "安装"; }
+      log((r && r.error) || "安装未完成，请稍后重试。", "bad");
+    } catch (e) {
+      if (btn) { btn.disabled = false; btn.textContent = "安装"; }
+      log("安装没有完成，请稍后再试。", "bad");
+    } finally {
+      running = Math.max(0, running - 1);
+      bumpFab();
+    }
+  }
+
+  /* ---- 搜索与翻页 ---- */
+  const PAGE = 20;
+  let page = 1;
+  let total = 0;
+  // 最近一次画到列表上的结果，用来写进缓存
+  let lastHits = [];
+
+  function pageCount() { return Math.max(1, Math.ceil(total / PAGE)); }
+
+  /* Modrinth 与 CurseForge 都只允许翻到第 10000 条（offset + limit ≤ 10000），
+     再往后请求会直接报错或返回空。所以「能翻到第几页」和「一共有几页」是两回事：
+     前者封顶，后者只用来显示总数。不封顶的话，翻到最后一页会拿到空结果、
+     再被"空页就退到最后一页"的逻辑弹回去，来回死循环卡在加载界面。 */
+  const MAX_OFFSET = 10000;
+  function maxPage() {
+    return Math.max(1, Math.min(pageCount(), Math.floor(MAX_OFFSET / PAGE)));
+  }
+
+  // 只画必要几个页码：1 … 当前±1 … 末页，中间用省略号，免得 77 页排成一整行。
+  function renderPager() {
+    const box = $("#pager");
+    const pages = maxPage();
+    box.hidden = total <= PAGE;
+    $("#pinput").max = String(pages);
+    if (box.hidden) return;
+    $("#pprev").disabled = page <= 1;
+    $("#pnext").disabled = page >= pages;
+    const keep = [...new Set([1, pages, page - 1, page, page + 1])]
+      .filter(n => n >= 1 && n <= pages).sort((a, b) => a - b);
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    for (const n of keep) {
+      if (last && n - last > 1) {
+        const gap = document.createElement("span");
+        gap.className = "gap";
+        gap.textContent = "…";
+        frag.append(gap);
+      }
+      const b = document.createElement("button");
+      b.className = "pnum" + (n === page ? " on" : "");
+      b.textContent = String(n);
+      b.onclick = () => goPage(n);
+      frag.append(b);
+      last = n;
+    }
+    $("#pnums").replaceChildren(frag);
+  }
+
+  function renderHits(hits) {
+    const box = $("#list");
+    box.replaceChildren();
+    if (!hits.length) {
+      box.append(Object.assign(document.createElement("div"),
+        { className: "empty", textContent: "没有找到匹配的模组。" }));
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    for (const h of hits) frag.append(row(h));
+    box.append(frag);
+  }
+
+  async function goPage(n) {
+    page = Math.min(Math.max(1, n), maxPage());
+    await search();
+  }
+
+  // 同一个关键词/筛选/页码只请求一次：翻回上一页是瞬时的。
+  const cache = new Map();
+  const CACHE_MAX = 40;
+  // 每次搜索自增；晚回来的旧请求直接丢掉，免得把新结果盖掉。
+  let searchSeq = 0;
+
+  // 同一个模组常常在两个源都有（名字一样、下载量不同）：按标题归一化后
+  // 只留下载量大的那条，否则「全部来源」里会出现两条一模一样的。
+  function dedupe(hits) {
+    const seen = new Map();
+    const out = [];
+    for (const h of hits) {
+      const k = String(h.title || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+      if (!k) { out.push(h); continue; }
+      const prev = seen.get(k);
+      if (!prev) { seen.set(k, h); out.push(h); continue; }
+      if ((h.downloads || 0) > (prev.downloads || 0)) {
+        const i = out.indexOf(prev);
+        if (i >= 0) out[i] = h;
+        seen.set(k, h);
+      }
+    }
+    return out;
+  }
+
+  async function search() {
+    if (!mcVersion) await loadGame().catch(() => {});
+    const q = ($("#q").value || "").trim();
+    const b = $("#search");
+    const key = [source, q, loader, mcVersion, page].join("|");
+    const hit = cache.get(key);
+    if (hit) {
+      total = hit.total;
+      lastHits = hit.hits;
+      renderHits(hit.hits);
+      renderPager();
+      log(total
+        ? "找到 " + total + " 个模组，第 " + page + " / " + maxPage() + " 页" + (pageCount() > maxPage() ? "（只显示前 " + MAX_OFFSET + " 个）" : "")
+        : "没有找到匹配的模组。", total ? "on" : "");
+      return;
+    }
+    const my = ++searchSeq;
+    b.disabled = true;
+    skeleton($("#list"), 6);
+    log(page > 1 ? "正在翻到第 " + page + " 页…" : (q ? "正在搜索 " + q + "…" : "正在加载热门模组…"), "busy");
+
+    const got = { mr: null, cf: null };
+    let painted = false;
+    let clamped = false;
+
+    /* 谁先回来就先画谁：Modrinth 通常 300 ms，CurseForge 要 1~2 秒，
+       等两个都到齐再画等于白等最慢的那个。 */
+    function paint() {
+      if (my !== searchSeq) return;
+      const mr = got.mr, cf = got.cf;
+      if (!mr && !cf) return;
+      const partial = source === "all" && !(mr && cf);
+      let hits = [];
+      if (mr && cf) {
+        // 「全部来源」：两边各取一页，交替排开，总数相加。
+        const a = mr.hits || [], c = cf.hits || [];
+        for (let i = 0; i < Math.max(a.length, c.length); i++) {
+          if (a[i]) hits.push(a[i]);
+          if (c[i]) hits.push(c[i]);
+        }
+        hits = dedupe(hits).slice(0, PAGE);
+      } else {
+        hits = ((mr || cf || {}).hits) || [];
+      }
+      // 只有结果齐了才更新总数：否则「最后一页」的页数会随着另一个源到齐而变。
+      if (!partial) {
+        total = ((mr && mr.total) || 0) + ((cf && cf.total) || 0) || hits.length;
+      }
+      if (!hits.length && total > 0 && page > 1) {
+        /* 空页有两种可能：页码超过了源能翻到的上限，或者这一页真的没有内容。
+           只允许回退一次，而且回退目标必须真的更小 —— 否则就停在这里说"没有更多了"，
+           绝不递归重试（以前这里会无限弹回最后一页，界面永远停在骨架屏上）。 */
+        const last = maxPage();
+        if (!clamped && page > last) {
+          clamped = true;
+          page = last;
+          b.disabled = false;
+          search();
+          return;
+        }
+        renderHits([]);
+        renderPager();
+        lastHits = [];
+        painted = true;
+        log("没有更多了，这是最后一页。", "on");
+        return;
+      }
+      renderHits(hits);
+      renderPager();
+      lastHits = hits;
+      painted = true;
+      log(total
+        ? "找到 " + total + " 个模组，第 " + page + " / " + maxPage() + " 页" + (partial ? "（另一个源还在加载）" : "") + (pageCount() > maxPage() ? "（只显示前 " + MAX_OFFSET + " 个）" : "")
+        : (partial ? "正在加载…" : "没有找到匹配的模组。"), total ? "on" : "busy");
+    }
+
+    const jobs = [];
+    if (source !== "curseforge") {
+      jobs.push(miy.call("miy.mc.mods",
+        { query: q, loader, mc: mcVersion, limit: PAGE, offset: (page - 1) * PAGE }, 12000)
+        .then(r => { got.mr = r; paint(); })
+        .catch(() => {}));
+    }
+    if (source !== "modrinth") {
+      jobs.push(miy.call("miy.mc.cf.search",
+        { query: q, loader, mc: mcVersion, page, limit: PAGE }, 12000)
+        .then(r => { got.cf = r; paint(); })
+        .catch(() => {}));
+    }
+    await Promise.allSettled(jobs);
+    if (my !== searchSeq) return;
+
+    if (!got.mr && !got.cf) {
+      // 两个源都没回来：有旧结果就先给旧的，别让用户对着空页面。
+      const old = cache.get(key);
+      if (old) {
+        total = old.total;
+        renderHits(old.hits);
+        renderPager();
+        log("网络不太稳定，先显示上次的结果。", "bad");
+        b.disabled = false;
+        return;
+      }
+      $("#list").replaceChildren(Object.assign(document.createElement("div"),
+        { className: "empty", textContent: "无法连接模组源，请稍后重试。" }));
+      log("搜索失败，请检查网络后重试。", "bad");
+      b.disabled = false;
+      return;
+    }
+    if (!painted) paint();
+    if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value);
+    cache.set(key, { hits: lastHits, total });
+    b.disabled = false;
+  }
+
+  /* 换筛选条件 = 回到第一页，否则用户会停在一个空白的第 9 页上。 */
+  function searchFromFirst() { page = 1; return search(); }
+  /* ---- 详情 ---- */
+  let cur = null;
+
+  function chipsFor(list, cls) {
+    const frag = document.createDocumentFragment();
+    for (const s of list || []) {
+      const c = document.createElement("span");
+      c.className = "chip" + (cls ? " " + cls : "");
+      c.textContent = s;
+      frag.append(c);
+    }
+    return frag;
+  }
+
+  async function openDetail(h) {
+    cur = h;
+    cur.facets = null;
+    dvMc = "";
+    dvLd = "";
+    $("#list-view").style.display = "none";
+    $("#detail").hidden = false;
+    $("#dtitle").textContent = h.title;
+    $("#ddesc").textContent = h.desc || "";
+    iconInto($("#dicon"), h.title, h.icon, true);
+    const chips = $("#dchips");
+    chips.replaceChildren();
+    const dl = document.createElement("span");
+    dl.className = "chip p";
+    dl.textContent = num(h.downloads) + " 次下载";
+    chips.append(dl);
+    if (mcVersion) chips.append(chipsFor([mcVersion], "p"));
+
+    $("#dcount").textContent = "正在读取…";
+    $("#dlist").replaceChildren();
+    skeleton($("#dlist"), 4);
+
+    const isCf = String(h.id || "").startsWith("cf:");
+    try {
+      const d = await miy.call(isCf ? "miy.mc.cf.mod" : "miy.mc.mod", { id: h.id, mc: mcVersion, loader }, 30000);
+      if (d && d.ok) {
+        $("#ddesc").textContent = d.desc || h.desc || "";
+        chips.replaceChildren(dl);
+        for (const c of d.categories || []) {
+          const e = document.createElement("span");
+          e.className = "chip";
+          e.textContent = c;
+          chips.append(e);
+        }
+        for (const l of d.loaders || []) {
+          const e = document.createElement("span");
+          e.className = "chip p";
+          e.textContent = l;
+          chips.append(e);
+        }
+      }
+    } catch (e) { /* 详情拿不到不影响版本列表 */ }
+
+    await loadVersions();
+  }
+
+  /* 详情页的两个筛选项：MC 版本 / 加载器。默认「全部」，选了就向服务端重新要一次，
+     这样即便模组有几百个版本也能拿到准确结果，而不是在前端截断。 */
+  let dvMc = "";
+  let dvLd = "";
+
+  // MC 版本是"平铺可扫"的短标签，做成按钮行比下拉快；
+  // 加载器名称长且条目少，继续用下拉。
+  function fillVersionFilters(r) {
+    const mcs = (r && r.mc_versions) || [];
+    const lds = (r && r.loaders) || [];
+    if (lds.length) {
+      const ldItems = [{ value: "", label: "全部加载器" }]
+        .concat(lds.map(v => ({ value: v, label: v })));
+      dd($("#dld"), ldItems, dvLd, v => { dvLd = v; loadVersions(); });
+    }
+    const box = $("#dmcs");
+    box.replaceChildren();
+    if (!mcs.length) { box.hidden = true; return; }
+    box.hidden = false;
+    const mk = (val, label) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "mchip" + (val === dvMc ? " on" : "");
+      b.textContent = label;
+      b.onclick = () => { dvMc = dvMc === val ? "" : val; loadVersions(); };
+      box.append(b);
+    };
+    mk("", "全部版本");
+    mcs.forEach(v => mk(v, v));
+  }
+
+  function verRow(v, i) {
+    const row = document.createElement("div");
+    row.className = "ver";
+    row.style.animationDelay = Math.min(i, 10) * 16 + "ms";
+    const left = document.createElement("div");
+    left.className = "vleft";
+    const t = document.createElement("div");
+    t.className = "vt";
+    t.textContent = v.number || v.name || v.id;
+    const s = document.createElement("div");
+    s.className = "vs";
+    const gv = (v.game_versions || []).slice(0, 4).join(" / ");
+    s.textContent = [gv, (v.loaders || []).join(" "), kb(v.size), (v.date || "").slice(0, 10)]
+      .filter(Boolean).join(" / ");
+    left.append(t, s);
+    const go = document.createElement("button");
+    go.className = "go";
+    go.textContent = "安装";
+    go.onclick = () => install(
+      { id: cur.id, title: cur.title, icon: cur.icon }, go, v.id || v.vid);
+    row.append(left, go);
+    return row;
+  }
+
+  function verSection(title, list, start) {
+    const frag = document.createDocumentFragment();
+    const h = document.createElement("div");
+    h.className = "vsec";
+    h.textContent = title;
+    frag.append(h);
+    list.forEach((v, i) => frag.append(verRow(v, start + i)));
+    return frag;
+  }
+
+  async function loadVersions() {
+    const box = $("#dlist");
+    skeleton(box, 4);
+    $("#dcount").textContent = "正在读取…";
+    const isCf = String(cur.id || "").startsWith("cf:");
+    try {
+      // 不把 MC 版本传给服务端：要一次拿到全部版本，才能在界面上分栏。
+      const r = isCf
+        ? await miy.call("miy.mc.cf.mod", { id: cur.id, loader: dvLd || loader }, 30000)
+        : await miy.call("miy.mc.mod.versions",
+            { id: cur.id, loader: dvLd, limit: 300 }, 30000);
+      const list = isCf ? ((r && r.files) || []) : ((r && r.versions) || []);
+      // CurseForge 不返回 mc_versions，从文件的 gameVersions 里推一份出来。
+      if (isCf && r && !r.mc_versions) {
+        const set = new Set();
+        (r.files || []).forEach(f => (f.game_versions || []).forEach(g => {
+          if (/^\d+\.\d+(\.\d+)?$/.test(g)) set.add(g);
+        }));
+        r.mc_versions = [...set].sort().reverse();
+      }
+      // 下拉选项取"没有筛选"的那一次结果，之后筛选只影响下面这份列表。
+      if (!cur.facets && !dvLd) cur.facets = r || {};
+      fillVersionFilters(cur.facets || r || {});
+      if (!list.length) {
+        box.replaceChildren(Object.assign(document.createElement("div"),
+          { className: "empty", textContent: "没有符合条件的版本，请将筛选改为「全部」。" }));
+        $("#dcount").textContent = "";
+        return;
+      }
+      const has = (v, ver) => (v.game_versions || []).indexOf(ver) >= 0;
+      const shown = dvMc ? list.filter(v => has(v, dvMc)) : list;
+      $("#dcount").textContent =
+        "共 " + shown.length + " 个" + (dvLd ? "（已筛选加载器）" : "");
+      if (!shown.length) {
+        box.replaceChildren(Object.assign(document.createElement("div"),
+          { className: "empty", textContent: "没有适用于 " + dvMc + " 的版本。" }));
+        return;
+      }
+      if (dvMc) {
+        box.replaceChildren(verSection("适用于 " + dvMc, shown, 0));
+        return;
+      }
+      // 默认视图：当前 MC 版本的排在最前，其余版本接在后面。
+      const mine = shown.filter(v => has(v, mcVersion));
+      const rest = shown.filter(v => !has(v, mcVersion));
+      const frag = document.createDocumentFragment();
+      if (mine.length) {
+        frag.append(verSection("适用于 " + mcVersion + "（" + mine.length + "）", mine, 0));
+      }
+      if (rest.length) {
+        frag.append(verSection("其他版本（" + rest.length + "）", rest, mine.length));
+      }
+      box.replaceChildren(frag);
+    } catch (e) {
+      box.replaceChildren(Object.assign(document.createElement("div"),
+        { className: "empty", textContent: "未能读取版本列表，请稍后重试。" }));
+      $("#dcount").textContent = "";
+    }
+  }
+
+  $("#back").onclick = () => {
+    $("#detail").hidden = true;
+    $("#list-view").style.display = "flex";
+  };
+  $("#goto").onclick = () => {
+    if (!cur) return;
+    const isCf = String(cur.id || "").startsWith("cf:");
+    const url = isCf
+      ? "https://www.curseforge.com/minecraft/mc-mods/" + String(cur.id).replace("cf:", "")
+      : "https://modrinth.com/mod/" + (cur.slug || cur.id);
+    miy.call("miy.app.open", { url }, 15000)
+      .catch(() => log("无法打开浏览器。", "bad"));
+  };
+  $("#mcmod").onclick = () => {
+    if (!cur) return;
+    miy.call("miy.app.open",
+      { url: "https://search.mcmod.cn/s?key=" + encodeURIComponent(cur.title) }, 15000)
+      .catch(() => log("无法打开浏览器。", "bad"));
+  };
+  $("#copy").onclick = async () => {
+    if (!cur) return;
+    try {
+      await miy.call("miy.app.clipboard", { text: cur.title }, 15000);
+      log("已复制：" + cur.title, "on");
+    } catch (e) {
+      log("复制没有成功。", "bad");
+    }
+  };
+
+  $("#search").onclick = () => searchFromFirst();
+  $("#pprev").onclick = () => goPage(page - 1);
+  $("#pnext").onclick = () => goPage(page + 1);
+  $("#pgo").onclick = () => goPage(parseInt($("#pinput").value, 10) || 1);
+  $("#pinput").onkeydown = (e) => { if (e.key === "Enter") goPage(parseInt($("#pinput").value, 10) || 1); };
+  $("#q").onkeydown = (e) => { if (e.key === "Enter") searchFromFirst(); };
+
+  // 两件事并行：列表不该等"当前版本"读完才出现
+  // 先拿到当前版本再搜：否则第一次请求没有版本筛选，总数会大出一个量级，
+  // 翻页后条件补上、页数突然从 3000+ 掉到 400+。
+  (async () => {
+    await loadGame().catch(() => {});
+    await search().catch(() => {});
+  })();
+</script>

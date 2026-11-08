@@ -1,0 +1,47 @@
+{
+  "id": "miy.hello",
+  "name": "Hello",
+  "version": "0.1.0",
+  "description": "spike 用的最小插件：ping / echo / log",
+  "abi": 1,
+  "entry": "miy_hello.dll",
+  "priority": 0,
+  "eager": true,
+  "contributes": {
+    "settings.schema": {
+      "greeting": {
+        "type": "string",
+        "title": "问候语",
+        "description": "echo 服务会把它原样带回来。",
+        "default": "你好，MIY",
+        "group": "Hello",
+        "order": 0
+      },
+      "retries": {
+        "type": "int",
+        "title": "重试次数",
+        "description": "0 到 10 之间。",
+        "min": 0,
+        "max": 10,
+        "default": 3,
+        "group": "Hello",
+        "order": 1
+      },
+      "verbose": {
+        "type": "bool",
+        "title": "详细日志",
+        "default": false,
+        "group": "Hello",
+        "order": 2
+      },
+      "mode": {
+        "type": "enum",
+        "title": "模式",
+        "enum": ["fast", "safe"],
+        "default": "fast",
+        "group": "Hello",
+        "order": 3
+      }
+    }
+  }
+}

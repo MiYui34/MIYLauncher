@@ -1,0 +1,12 @@
+[package]
+name = "miy-boom"
+description = "故意崩溃的插件：用来验证宿主不会被插件拖死"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+miy-abi = { workspace = true }

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- MIYLauncher app icon — 一个大写的 M。
+       底色 = 界面主色 #415F91 的两种深浅，字形 = 界面最亮表面色 #F4F7FF。
+       几何全部落在偶数坐标上，导出小尺寸时不会出现半像素发虚。 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4C6BA2"/>
+      <stop offset="1" stop-color="#37517F"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 圆角方块：3.5% 透明边（再大就浪费 16px 的像素了），圆角 224 -->
+  <rect x="36" y="36" width="952" height="952" rx="224" fill="url(#bg)"/>
+
+  <!-- M：竖笔 162 宽；斜笔按"垂直厚度 162"折算成水平 195，
+       远景看过去斜笔不会比竖笔细一档。顶部谷底到 468（占高 44%），
+       内凹到 663 —— 小尺寸下也留得住中间的负空间。 -->
+  <path fill="#F4F7FF"
+        d="M150 874 L150 150 L312 150 L512 468 L712 150 L874 150 L874 874
+           L712 874 L712 345 L512 663 L312 345 L312 874 Z"/>
+</svg>

@@ -1,0 +1,1209 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+/* ============================================================
+   Material 3 浅色主题（blue seed）
+   颜色角色按 m3.material.io 的 tonal palette 命名：primary / surface
+   container 阶梯 / outline / error。改主题只动这一段。
+   ============================================================ */
+:root{
+  --primary:#415f91; --on-primary:#fff;
+  --p-cont:#d6e3ff; --on-p-cont:#001b3e;
+  --secondary:#565f71; --s-cont:#dae2f9; --on-s-cont:#131c2b;
+  --tertiary:#705575; --t-cont:#fad8fd; --on-t-cont:#28132e;
+  --error:#ba1a1a; --e-cont:#ffdad6; --on-e-cont:#410002;
+
+  --surface:#f9f9ff; --on-surface:#191c20;
+  --on-var:#44474e; --outline:#74777f; --outline-var:#c4c6d0;
+  --lowest:#fff; --low:#f3f3fa; --cont:#ededf4; --high:#e7e8ee; --highest:#e2e2e9;
+  --inverse:#2e3036; --on-inverse:#f0f0f7;
+
+  --ok:#146c2e; --warn:#7a5900;
+  --font:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","Noto Sans SC",system-ui,sans-serif;
+  --display:"Segoe UI Variable Display","Segoe UI","Microsoft YaHei UI","Noto Sans SC",system-ui,sans-serif;
+  --mono:"Cascadia Mono","Consolas","Microsoft YaHei UI",monospace;
+  --e1:0 1px 2px rgba(16,24,40,.06);
+  --e2:0 2px 6px rgba(16,24,40,.09);
+
+  /* 动效令牌：M3 的 easing 三件套 + 三档时长。别在别处硬写贝塞尔。 */
+  --ease-std:cubic-bezier(.2,0,0,1);       /* standard：小范围属性变化 */
+  --ease-dec:cubic-bezier(.05,.7,.1,1);    /* emphasized decelerate：进场 */
+  --ease-acc:cubic-bezier(.3,0,.8,.15);    /* emphasized accelerate：退场 */
+  --d-short:120ms; --d-med:220ms; --d-long:320ms;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--low); color:var(--on-surface);
+  font:400 14px/20px var(--font); overflow:hidden; color-scheme:light;
+  -webkit-font-smoothing:antialiased; font-variant-numeric:tabular-nums; user-select:none;
+}
+/* 紧凑模式要真的变紧凑：光改字号在 100% 缩放下几乎看不出来。 */
+body.compact{font-size:13px}
+body.compact .wrap{padding-top:6px}
+body.compact .head{margin-bottom:10px}
+body.compact .head h1{font-size:20px; line-height:26px}
+body.compact .head .sub{margin-top:4px}
+body.compact .card{padding:6px; margin-bottom:10px; border-radius:14px}
+body.compact .row{padding:7px 10px; min-height:40px}
+body.compact .field{padding:8px 10px}
+body.compact pre.log{line-height:18px}
+.frag{display:contents}
+
+/* ---------- 动效 ----------
+   只在"换了页面"时进场，同一页刷新（事件触发重渲染、日志 1.5 s 轮询）
+   不加动效，否则列表会一直抖。 */
+@keyframes viewIn{from{opacity:0} to{opacity:1}}
+@keyframes rowIn{from{opacity:0; transform:translateY(8px)} to{opacity:1; transform:none}}
+@keyframes rowInX{from{opacity:0; transform:translateX(-6px)} to{opacity:1; transform:none}}
+#view.enter{animation:viewIn var(--d-med) var(--ease-std) both}
+#view.enter .card{animation:rowIn var(--d-long) var(--ease-dec) both}
+#view.enter .item,#view.enter .field{animation:rowIn var(--d-long) var(--ease-dec) both}
+#view.enter .chip{animation:rowInX var(--d-med) var(--ease-dec) both}
+
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:1ms !important; animation-delay:0ms !important;
+    transition-duration:1ms !important}
+}
+
+/* ---------- 顶栏（M3 top app bar） ---------- */
+.appbar{
+  height:56px; display:flex; align-items:center; gap:14px;
+  padding:0 8px 0 20px; background:var(--surface);
+}
+.brand{display:flex; align-items:center; gap:10px; font:500 15px/20px var(--display); color:var(--on-surface)}
+.wctl{display:flex; gap:2px; margin-left:auto}
+.wctl button{
+  width:40px; height:40px; border:0; border-radius:20px; background:transparent;
+  color:var(--on-var); cursor:pointer; display:grid; place-items:center;
+  transition:background var(--d-short) var(--ease-std), color var(--d-short) var(--ease-std),
+             transform var(--d-short) var(--ease-std);
+}
+.wctl button:hover{background:var(--high); color:var(--on-surface)}
+.wctl button:active{transform:scale(.9)}
+.wctl button.close:hover{background:var(--e-cont); color:var(--on-e-cont)}
+
+/* ---------- 主体：导航栏（M3 navigation rail）+ 内容 ---------- */
+.shell{display:flex; height:calc(100% - 56px)}
+.rail{
+  width:92px; flex:0 0 92px; display:flex; flex-direction:column; align-items:center;
+  gap:2px; padding:8px 0 16px; overflow-y:auto; overflow-x:hidden;
+}
+.rail::-webkit-scrollbar{width:0}
+.dest{
+  width:76px; border:0; background:transparent; color:var(--on-var); cursor:pointer;
+  display:flex; flex-direction:column; align-items:center; gap:3px; padding:3px 0 6px;
+  font:500 12px/16px var(--font); border-radius:16px;
+  transition:color var(--d-med) var(--ease-std);
+}
+.dest .ico{
+  width:58px; height:32px; border-radius:16px; display:grid; place-items:center;
+  transition:background-color var(--d-med) var(--ease-std), transform var(--d-short) var(--ease-std);
+}
+.dest .ico svg{width:22px; height:22px; display:block; transition:transform var(--d-med) var(--ease-dec)}
+.dest:hover .ico{background:var(--high)}
+.dest:active .ico{transform:scale(.92)}
+.dest.on{color:var(--on-s-cont)}
+.dest.on .ico{background:var(--s-cont)}
+.dest.on .ico svg{transform:scale(1.06)}
+.dest .lab{max-width:76px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+
+main{flex:1; min-width:0; overflow-y:auto; padding:6px 36px 40px 10px}
+main::-webkit-scrollbar{width:10px}
+main::-webkit-scrollbar-thumb{background:var(--outline-var); border-radius:8px; border:3px solid var(--low)}
+.wrap{max-width:880px; margin:0 auto}
+
+/* ---------- 页头 ---------- */
+.head{padding:14px 4px 18px}
+.head h1{font:400 24px/32px var(--display); color:var(--on-surface); letter-spacing:.1px}
+.head .sub{font:400 13px/20px var(--font); color:var(--on-var); margin-top:4px}
+
+/* ---------- 卡片 ---------- */
+.card{background:var(--lowest); border-radius:16px; padding:8px; margin-bottom:16px; box-shadow:var(--e1)}
+.glabel{
+  font:500 11px/16px var(--font); color:var(--on-var); letter-spacing:.08em;
+  text-transform:uppercase; padding:12px 12px 4px;
+}
+
+/* ---------- 插件列表 ---------- */
+.item{
+  display:flex; align-items:center; gap:16px; padding:10px 12px; border-radius:12px; min-height:56px;
+  transition:background-color var(--d-short) var(--ease-std);
+}
+.item:hover{background:var(--cont)}
+.avatar{
+  width:40px; height:40px; border-radius:20px; flex:0 0 auto; display:grid; place-items:center;
+  background:var(--s-cont); color:var(--on-s-cont); font:500 16px/20px var(--font);
+  transition:transform var(--d-med) var(--ease-dec);
+}
+.item:hover .avatar{transform:scale(1.05)}
+.grow{flex:1; min-width:0}
+.name{font:500 14px/20px var(--font); color:var(--on-surface); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.ver{font:400 12px/16px var(--font); color:var(--on-var); margin-left:6px}
+.sub{font:400 12px/16px var(--font); color:var(--on-var); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.state{display:flex; align-items:center; gap:7px; font:500 12px/16px var(--font); color:var(--ok); flex:0 0 auto}
+.state.bad{color:var(--error)}
+.dot{width:8px; height:8px; border-radius:4px; background:currentColor}
+.calls{font:400 12px/16px var(--font); color:var(--on-var); min-width:56px; text-align:right}
+
+/* ---------- 设置项 ---------- */
+.field{
+  display:flex; align-items:center; gap:16px; padding:8px 12px; border-radius:12px; min-height:56px;
+  transition:background-color var(--d-short) var(--ease-std);
+}
+.field:hover{background:var(--cont)}
+.field .lbl{flex:1; min-width:0}
+.field .lbl b{display:block; font:500 14px/20px var(--font); color:var(--on-surface)}
+.field .lbl i{display:block; font:400 12px/16px var(--font); font-style:normal; color:var(--on-var); margin-top:2px}
+.field .reset{
+  border:0; background:transparent; color:var(--primary); font:500 13px/20px var(--font);
+  cursor:pointer; padding:4px 8px; border-radius:12px; opacity:0; transition:opacity .13s,background .13s;
+}
+.field:hover .reset{opacity:1}
+.field .reset:hover{background:var(--p-cont); color:var(--on-p-cont)}
+
+input[type=text],input[type=number],select{
+  height:40px; width:180px; flex:0 0 auto; border-radius:8px;
+  border:1px solid var(--outline); background-color:#fff; color:var(--on-surface);
+  color-scheme:light; font:400 13px/20px var(--font); padding:0 12px; outline:none;
+  /* 不关掉 UA 的 appearance，Windows 会再画一圈自己的边框，和我们的叠成双层 */
+  appearance:none; -webkit-appearance:none;
+  transition:border-color .13s;
+}
+input:focus,select:focus{border-color:var(--primary); border-width:2px; padding:0 11px}
+input::placeholder{color:var(--on-var)}
+select{
+  appearance:none; -webkit-appearance:none; padding-right:30px;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='%2344474e' stroke-width='1.6' stroke-linecap='round'><path d='M3 4.7 6 7.7l3-3'/></svg>");
+  background-repeat:no-repeat; background-position:right 11px center;
+}
+/* 弹层是浏览器自己画的，只有把 option 也写成浅色才不会是系统灰 */
+select option{background-color:#fff; color:var(--on-surface)}
+
+/* 自定义下拉：原生 select 的弹层归系统画，底色改不动，所以自己实现一个 */
+/* z-index 必须加在 .dd 自己身上：只给 .dd-menu 加，弹层仍然会被后面那些
+   兄弟节点（下一行设置项、按钮）盖住 —— 它们是同一层里的后继元素。 */
+.dd{position:relative; z-index:1; flex:0 0 auto}
+.dd.open{z-index:80}
+/* 只抬高 .dd 还不够：后面的设置行里有自己的输入框，它们和 .dd 不在同一个
+   层叠上下文里也能按 DOM 顺序画上来。真正生效的是把整行一起浮起来。 */
+.field:has(.dd.open){position:relative; z-index:90}
+.dd-btn{
+  height:40px; min-width:180px; padding:0 34px 0 12px; border:1px solid var(--outline);
+  border-radius:8px; background-color:#fff; color:var(--on-surface);
+  font:400 13px/20px var(--font); text-align:left; cursor:pointer; position:relative;
+  transition:border-color var(--d-short) var(--ease-std);
+}
+.dd-btn:hover{border-color:var(--on-var)}
+.dd.open .dd-btn{border-color:var(--primary); border-width:2px; padding:0 33px 0 11px}
+.dd-arrow{
+  position:absolute; right:12px; top:50%; width:9px; height:9px; margin-top:-7px;
+  border-right:1.8px solid var(--on-var); border-bottom:1.8px solid var(--on-var);
+  transform:rotate(45deg); transition:transform var(--d-short) var(--ease-std);
+}
+.dd.open .dd-arrow{transform:rotate(-135deg); margin-top:-3px}
+.dd-menu{
+  position:absolute; top:calc(100% + 6px); right:0; min-width:100%; display:none; z-index:60;
+  background:#fff; border-radius:12px; padding:6px;
+  box-shadow:0 10px 28px rgba(16,24,40,.16), 0 2px 6px rgba(16,24,40,.08);
+}
+.dd.open .dd-menu{display:block; animation:ddIn var(--d-short) var(--ease-dec)}
+@keyframes ddIn{from{opacity:0; transform:translateY(-4px)} to{opacity:1; transform:none}}
+.dd-opt{
+  display:block; width:100%; height:36px; padding:0 12px; border:0; border-radius:8px;
+  background:none; color:var(--on-surface); font:400 13px/20px var(--font);
+  text-align:left; cursor:pointer; white-space:nowrap;
+}
+.dd-opt:hover{background:var(--high)}
+.dd-opt.on{background:var(--s-cont); color:var(--on-s-cont)}
+
+/* M3 switch */
+.switch{position:relative; width:52px; height:32px; flex:0 0 auto; cursor:pointer}
+.switch input{position:absolute; opacity:0; width:0; height:0}
+.switch i{
+  position:absolute; inset:0; border-radius:16px; background:var(--highest);
+  border:2px solid var(--outline); transition:background .18s,border-color .18s;
+}
+.switch i::after{
+  content:""; position:absolute; top:50%; left:6px; width:16px; height:16px; margin-top:-8px;
+  border-radius:50%; background:var(--outline);
+  transition:transform var(--d-med) var(--ease-dec), width var(--d-med) var(--ease-dec),
+             height var(--d-med) var(--ease-dec), margin var(--d-med) var(--ease-dec),
+             left var(--d-med) var(--ease-dec), background var(--d-short) var(--ease-std);
+}
+.switch input:checked + i{background:var(--primary); border-color:var(--primary)}
+.switch input:checked + i::after{
+  transform:translateX(20px); width:24px; height:24px; margin-top:-12px; left:0;
+  background:var(--on-primary);
+}
+
+/* ---------- 按钮 ---------- */
+.btn{
+  height:40px; padding:0 24px; border:0; border-radius:20px; cursor:pointer;
+  background:var(--primary); color:var(--on-primary);
+  font:500 14px/20px var(--font);
+  transition:box-shadow var(--d-short) var(--ease-std), filter var(--d-short) var(--ease-std),
+             transform var(--d-short) var(--ease-std);
+}
+.btn:hover{box-shadow:var(--e2); filter:brightness(1.04)}
+.btn:active{transform:scale(.97)}
+.btn:disabled{opacity:.5; cursor:default; box-shadow:none; filter:none; transform:none}
+.btn.tonal{background:var(--s-cont); color:var(--on-s-cont)}
+.btn.tonal:hover{filter:brightness(.98)}
+.btn.outlined{background:transparent; color:var(--primary); border:1px solid var(--outline)}
+.btn.text{background:transparent; color:var(--primary); padding:0 12px}
+.btn.text:hover{background:var(--p-cont); box-shadow:none}
+.toolbar{display:flex; align-items:center; gap:10px; padding:2px 2px 14px; flex-wrap:wrap}
+.toolbar .meta{font:400 12px/16px var(--font); color:var(--on-var); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+
+/* ---------- 日志 ---------- */
+pre.log{
+  background:var(--lowest); border-radius:16px; padding:16px 18px; margin:0; box-shadow:var(--e1);
+  font:400 12px/1.75 var(--mono); color:var(--on-var); white-space:pre-wrap;
+  word-break:break-word; max-height:calc(100vh - 210px); overflow:auto; user-select:text;
+}
+pre.log::-webkit-scrollbar{width:8px}
+pre.log::-webkit-scrollbar-thumb{background:var(--outline-var); border-radius:8px}
+.hl-err{color:var(--error)} .hl-warn{color:var(--warn)} .hl-dim{color:var(--on-var)}
+
+.empty{padding:32px 12px; text-align:center; color:var(--on-var); font:400 13px/20px var(--font)}
+
+/* ---------- chip（M3 filter chip） ---------- */
+.owners{display:flex; gap:8px; flex-wrap:wrap; margin:0 0 16px}
+.chip{
+  height:32px; padding:0 14px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--outline-var); background:transparent; color:var(--on-var);
+  font:500 13px/20px var(--font);
+  transition:background-color var(--d-short) var(--ease-std), border-color var(--d-short) var(--ease-std),
+             color var(--d-short) var(--ease-std), transform var(--d-short) var(--ease-std);
+}
+.chip:hover{background:var(--high)}
+.chip:active{transform:scale(.96)}
+.chip.on{background:var(--s-cont); border-color:transparent; color:var(--on-s-cont)}
+
+/* ---------- 插件页面 ---------- */
+iframe.plugpage{
+  /* appbar 56 + main 上下内边距 6/40 = 102，留 6px 余量，免得底部凭空多一条空白 */
+  width:100%; height:calc(100vh - 108px); border:0; border-radius:16px;
+  background:transparent; display:block; color-scheme:light;
+}
+
+/* ---------- snackbar ---------- */
+#snack{
+  position:fixed; left:calc(50% + 46px); bottom:22px; transform:translate(-50%,16px) scale(.98);
+  background:var(--inverse); color:var(--on-inverse); border-radius:8px; padding:12px 18px;
+  font:400 13px/20px var(--font); opacity:0; pointer-events:none;
+  transition:opacity var(--d-med) var(--ease-std), transform var(--d-med) var(--ease-dec);
+  box-shadow:0 6px 20px rgba(16,24,40,.24); max-width:70vw;
+}
+#snack.show{opacity:1; transform:translate(-50%,0) scale(1)}
+#snack.err{background:var(--error); color:var(--on-error)}
+/* ---------- 右下角任务面板 ----------
+   下载是"已经在跑的事"，不该只活在某个页面里：切到哪儿都能看见进度。 */
+.fab{
+  position:fixed; right:22px; bottom:22px; width:52px; height:52px; border:0; border-radius:16px;
+  background:var(--primary); color:var(--on-primary); cursor:pointer; z-index:70;
+  display:grid; place-items:center; box-shadow:0 6px 18px rgba(65,95,145,.3);
+  transition:transform var(--d-short) var(--ease-std), filter var(--d-short) var(--ease-std);
+}
+.fab:hover{filter:brightness(1.06)}
+.fab:active{transform:scale(.94)}
+.fab[hidden]{display:none}
+.fab .badge{
+  position:absolute; top:-5px; right:-5px; min-width:20px; height:20px; padding:0 5px;
+  border-radius:10px; background:var(--error); color:var(--on-primary);
+  font:600 11px/20px var(--font); text-align:center;
+}
+.fab .badge[hidden]{display:none}
+.tasks{
+  position:fixed; right:22px; bottom:86px; width:340px; max-height:62vh; overflow:auto;
+  background:var(--lowest); border-radius:16px; padding:8px 14px 12px; z-index:69;
+  box-shadow:0 16px 40px rgba(16,24,40,.18), 0 2px 8px rgba(16,24,40,.08);
+  animation:rowIn var(--d-med) var(--ease-dec) both;
+}
+.tasks[hidden]{display:none}
+.tasks h4{font:500 13px/20px var(--font); color:var(--on-surface); padding:8px 0 6px}
+.tasks .empty{padding:16px 2px}
+.task{padding:10px 0; border-top:1px solid var(--high)}
+.task:first-of-type{border-top:0}
+.task .t{font:500 13px/18px var(--font); color:var(--on-surface)}
+.task .m{font:400 11.5px/16px var(--font); color:var(--on-var); margin-top:2px}
+.task .p{height:4px; border-radius:2px; background:var(--high); margin-top:8px; overflow:hidden}
+.task .p i{display:block; height:100%; background:var(--primary); border-radius:2px; transition:width .3s var(--ease-std)}
+.task.bad .m{color:var(--error)}
+.task .thead{display:flex; align-items:center; gap:10px}
+.task .thead .t{flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.task .tk-cancel{
+  flex:0 0 auto; height:24px; padding:0 10px; border:0; border-radius:12px;
+  background:var(--cont); color:var(--on-p-cont); font:500 11.5px/24px var(--font);
+  cursor:pointer; transition:background .15s var(--ease-std);
+}
+.task .tk-cancel:hover{background:var(--high)}
+.task .tk-cancel:disabled{opacity:.6; cursor:default}
+/* 切页占位：只在新页面还没画出来的一瞬间出现 */
+.loadhint{
+  padding:48px 4px; color:var(--on-var); font:400 13px/20px var(--font);
+  animation:fadeIn var(--d-med) var(--ease-std) both;
+}
+/* 目录类设置的"浏览"按钮 */
+.field .slider{display:flex; align-items:center; gap:12px; flex:0 0 auto; min-width:280px}
+/* 轨道单独画一层：滑块的白色描边不会把轨道切断，填充宽度也能和滑块圆心对齐 */
+.field .slider .rail{position:relative; flex:1 1 auto; min-width:150px; height:20px; display:flex; align-items:center}
+.field .slider .track{position:absolute; left:0; right:0; height:4px; border-radius:2px; background:var(--cont); overflow:hidden}
+.field .slider .track i{display:block; height:100%; width:0; background:var(--primary)}
+.field .slider input[type=range]{
+  position:absolute; left:0; top:0; width:100%; height:20px; margin:0;
+  appearance:none; background:transparent; outline:none; cursor:pointer;
+}
+.field .slider input[type=range]::-webkit-slider-runnable-track{height:20px; background:transparent; border:none}
+.field .slider input[type=range]::-webkit-slider-thumb{
+  appearance:none; width:16px; height:16px; border-radius:50%; background:var(--primary);
+  border:none; box-shadow:0 1px 3px rgba(0,0,0,.24); cursor:pointer;
+}
+.field .slider .sv{
+  font:500 13px/18px var(--mono); color:var(--on-surface); min-width:82px; text-align:right;
+  font-variant-numeric:tabular-nums;
+}
+.field .slider .hint{font:400 11px/16px var(--font); color:var(--on-var); white-space:nowrap}
+.field .pickrow{display:flex; gap:8px; align-items:center; flex:0 0 auto}
+.field .pickrow input{width:190px}
+.field .pick{
+  height:40px; padding:0 14px; border-radius:8px; white-space:nowrap; cursor:pointer;
+  background:transparent; color:var(--primary); border:1px solid var(--outline);
+  font:500 13px/38px var(--font); transition:background var(--d-short) var(--ease-std);
+}
+.field .pick:hover{background:var(--s-cont)}
+</style>
+</head>
+<body>
+<header class="appbar">
+  <div class="brand">MIYLauncher</div>
+  <div class="wctl">
+    <button data-a="minimize" title="最小化">
+      <svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 7h8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+    </button>
+    <button data-a="close" class="close" title="关闭">
+      <svg width="14" height="14" viewBox="0 0 14 14"><path d="M3.6 3.6l6.8 6.8M10.4 3.6l-6.8 6.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+</header>
+<div class="shell">
+  <nav class="rail" id="nav"></nav>
+  <main><div class="wrap" id="view"></div></main>
+</div>
+<button id="fab" class="fab" hidden title="下载任务">
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3a1 1 0 0 1 1 1v8.6l2.29-2.3a1 1 0 1 1 1.42 1.42l-4 4a1 1 0 0 1-1.42 0l-4-4a1 1 0 1 1 1.42-1.42L11 12.6V4a1 1 0 0 1 1-1zM4 19h16v2H4z"/></svg>
+  <span class="badge" id="fabbadge" hidden>0</span>
+</button>
+<div class="tasks" id="tasks" hidden></div>
+<div id="snack"></div>
+
+<script>
+"use strict";
+// 页面里任何一个未捕获的异常，都别让它变成一片空白——直接把错误摆在页面
+// 上，截图就能看见。（空白页最难查：脚本挂了和"数据还没回来"长得一样。）
+window.addEventListener("error", e => {
+  const v = document.getElementById("view");
+  if (v) v.textContent = "界面加载失败，请重启启动器：" + (e.message || e);
+});
+const $ = (s, r = document) => r.querySelector(s);
+const mk = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+};
+
+/* Material Symbols 风格的 24px 图标（全部同一套填充图形，混用描边会显脏）。 */
+const ICON = {
+  home: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>',
+  videogame: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21 6H3a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zm-10 7H8v3H6v-3H3v-2h3V8h2v3h3zm4.5 2a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3-3a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>',
+  info: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 15h-2v-6h2zm0-8h-2V7h2z"/></svg>',
+  extension: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.5 11H19V7a2 2 0 0 0-2-2h-4V3.5A2.5 2.5 0 0 0 10.5 1 2.5 2.5 0 0 0 8 3.5V5H4a2 2 0 0 0-2 2v3.8h1.5a2.7 2.7 0 0 1 0 5.4H2V20a2 2 0 0 0 2 2h3.8v-1.5a2.7 2.7 0 0 1 5.4 0V22H17a2 2 0 0 0 2-2v-4h1.5a2.5 2.5 0 0 0 0-5z"/></svg>',
+  settings: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.5.5 0 0 0-.48-.41h-3.84a.5.5 0 0 0-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.5.5 0 0 0-.59.22L2.74 8.87a.5.5 0 0 0 .12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.5.5 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.5.5 0 0 0-.12-.61zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg>',
+  article: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm-2 14H7v-2h10zm0-4H7v-2h10zm0-4H7V7h10z"/></svg>',
+  widgets: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 13v8h8v-8zM3 21h8v-8H3zM3 3v8h8V3zm13.66-1.31L11 7.34 16.66 13l5.66-5.66z"/></svg>',
+  versions: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3a1 1 0 0 1 1 1v8.6l2.29-2.3a1 1 0 1 1 1.42 1.42l-4 4a1 1 0 0 1-1.42 0l-4-4a1 1 0 1 1 1.42-1.42L11 12.6V4a1 1 0 0 1 1-1zM4 19h16v2H4z"/></svg>'
+};
+
+/** 页面 id → 图标：常见的给个贴切的，其余用 puzzle 拼块。 */
+function iconFor(p, slot) {
+  if (slot === "home") return ICON.home;
+  if (p.id === "versions") return ICON.versions;
+  if (p.id === "games") return ICON.videogame;
+  if (p.id === "about") return ICON.info;
+  return ICON.widgets;
+}
+
+let view = "plugins";
+let seq = 0;
+let refreshT = 0;
+/* 插件贡献的页面：宿主只决定"放在哪个槽位"，页面长什么样由插件自己说了算。 */
+let pages = [];
+/* 设置页当前看的是谁的配置。每个插件一页，不混在一起。 */
+let activeOwner = null;
+/* 已挂载的插件页面 iframe：contentWindow -> plugin id（权限检查的锚点）。 */
+const framed = new Map();
+/* 已经建过的插件页 iframe：key -> <iframe>。
+   切走再切回来要复用它，不是重新建一个 —— 页面里的下载进度、滚动位置、
+   正在填的表单都得还在；反复销毁 srcdoc iframe 也会把 WebView2 拖住。 */
+const pageFrames = new Map();
+
+/* ---------- 通道 ---------- */
+async function api(service, req, ms) {
+  return await miy.call(service, req, ms || 8000);
+}
+function snack(msg, kind) {
+  const s = $("#snack");
+  s.textContent = msg;
+  s.className = "show" + (kind === "err" ? " err" : "");
+  clearTimeout(snack.t);
+  snack.t = setTimeout(() => { s.className = ""; }, 2600);
+}
+
+/* ---------- 视图切换 ---------- */
+const renderers = { plugins: viewPlugins, settings: viewSettings };
+
+/** 导航栏由插件贡献的页面 + 三个核心页组成。 */
+function buildNav() {
+  const items = [];
+  const home = pages.find(p => p.slot === "home");
+  if (home) items.push({ v: pageKey(home), label: "首页", icon: iconFor(home, "home") });
+  for (const p of pages) {
+    if (p.slot !== "nav") continue;
+    items.push({ v: pageKey(p), label: p.title || p.id, icon: iconFor(p, "nav") });
+  }
+  items.push({ v: "plugins", label: "插件", icon: ICON.extension });
+  items.push({ v: "settings", label: "设置", icon: ICON.settings });
+
+  const nav = $("#nav");
+  nav.replaceChildren(...items.map(it => {
+    const b = mk("button", "dest" + (it.v === view ? " on" : ""));
+    b.dataset.v = it.v;
+    b.title = it.label;
+    const ic = mk("span", "ico");
+    ic.innerHTML = it.icon;
+    b.append(ic, mk("span", "lab", it.label));
+    b.onclick = () => showView(it.v);
+    return b;
+  }));
+}
+
+function pageKey(p) {
+  return "page:" + p.plugin + "/" + p.id;
+}
+
+function showView(name) {
+  const changed = name !== view;
+  view = name;
+  document.body.dataset.view = name.split(":")[0];
+  document.querySelectorAll("#nav .dest").forEach(b =>
+    b.classList.toggle("on", b.dataset.v === name));
+
+  // 切页必须"立刻"生效。哪怕新页面的数据还没回来，也得先把画面换过去，
+  // 否则用户会盯着上一页的旧内容等一个不知道要多久的请求。
+  if (changed) {
+    // 作废所有还在路上的渲染
+    seq++;
+    const box = $("#view");
+    if (view.startsWith("page:")) {
+      const alive = pageFrames.get(view.slice(5));
+      if (alive) {
+        box.replaceChildren(alive);
+        painted = view;
+        forceAnim = false;
+        return;
+      }
+    }
+    box.replaceChildren(mk("div", "loadhint", "正在加载…"));
+    painted = null;
+  }
+  render();
+}
+
+/** 上一次真正画出来的视图。同页刷新不做进场动效，否则列表会一直抖。 */
+let painted = null;
+/** 同一视图里"内容换了"（比如切设置分区）也要重播一次进场。 */
+let forceAnim = false;
+
+function animNext() { forceAnim = true; }
+
+async function render() {
+  const mine = ++seq;
+  const box = document.createElement("div");
+  box.className = "frag";
+  try {
+    if (view.startsWith("page:")) await viewPage(box, view.slice(5));
+    else await renderers[view](box);
+  } catch (e) {
+    box.textContent = "";
+    const p = mk("div", "empty", "加载失败，请稍后重试。");
+    box.appendChild(p);
+  }
+  // 慢的响应不许覆盖新页面
+  if (mine !== seq) return;
+  const moving = view !== painted || forceAnim;
+  forceAnim = false;
+  painted = view;
+  $("#view").replaceChildren(...box.childNodes);
+  if (moving) playEnter();
+}
+
+/** 进场：容器淡入 + 子项依次抬起（每项 22 ms，最多 8 项后就齐步走）。 */
+function playEnter() {
+  const kids = document.querySelectorAll(
+    "#view .card, #view .item, #view .field, #view .chip");
+  kids.forEach((el, i) => {
+    el.style.animationDelay = Math.min(i, 8) * 22 + "ms";
+  });
+  const v = $("#view");
+  v.classList.remove("enter");
+  void v.offsetWidth;        // 强制一次重排，让同一个 class 能重新播
+  v.classList.add("enter");
+}
+
+/* ---------- 插件页面 ---------- */
+/*
+ * 页面的 HTML 由插件提供（`plugins/<id>/ui/…`），宿主负责把它装进一个
+ * sandbox iframe：没有同源、摸不到外壳的 DOM，只能用下面这套桥。
+ * 桥是双向的，权限在**宿主**这一侧判（见 window.onmessage）—— 页面自己
+ * 声明的权限一律不信。
+ */
+const BRIDGE_SRC = `(function(){
+  var seq = 0, pending = new Map(), listeners = [];
+  function post(m){ try { parent.postMessage(m, "*"); } catch(e){} }
+  window.miy = {
+    call: function(service, req, timeout){
+      var id = ++seq;
+      return new Promise(function(res, rej){
+        pending.set(id, {res:res, rej:rej});
+        post({miy:1, kind:"call", id:id, service:service, req:req||{}, timeout:timeout||20000});
+      });
+    },
+    onEvent: function(fn){ listeners.push(fn); },
+    // 让插件页面能跳转到"自己的"另一个页面（宿主会校验前缀，跳不出去）。
+    goto: function(v){ post({miy:1, kind:"goto", view: v || ""}); },
+    ready: true
+  };
+  window.addEventListener("message", function(e){
+    var d = e.data;
+    if (!d || d.miy !== 1) return;
+    if (d.kind === "reply") {
+      var p = pending.get(d.id); if (!p) return;
+      pending.delete(d.id);
+      if (d.ok) p.res(d.payload);
+      else { var err = new Error((d.payload && d.payload.message) || "调用失败"); err.code = d.payload && d.payload.code; p.rej(err); }
+    } else if (d.kind === "event") {
+      // 事件载荷是插件 emit 的原始字节，到这里是字符串。
+      // 能当 JSON 解析就解析：页面里写 payload.done 才拿得到东西。
+      var p = d.payload;
+      if (typeof p === "string") {
+        var s = p.trim();
+        if (s.charAt(0) === "{" || s.charAt(0) === "[") {
+          try { p = JSON.parse(s); } catch (e) { p = d.payload; }
+        }
+      }
+      for (var i = 0; i < listeners.length; i++) {
+        try { listeners[i]({topic: d.topic, payload: p}); } catch (e) {}
+      }
+    }
+  });
+})();`;
+
+/** 把桥注进插件页面。插在 doctype 之后，避免把文档打进怪异模式。 */
+function injectBridge(html, query) {
+  const tag = "<script>" + BRIDGE_SRC + "<\/script>";
+  const q = query
+    ? "<script>window.__MiyQuery = " + JSON.stringify(query) + ";<\/script>"
+    : "";
+  const m = html.match(/<!doctype[^>]*>/i);
+  if (m) {
+    const i = m.index + m[0].length;
+    return html.slice(0, i) + tag + q + html.slice(i);
+  }
+  return tag + q + html;
+}
+
+/** 宿主允许页面调的服务：自己的 `<plugin>.*` + 一小撮只读核心服务。
+ *  `miy.app.open` 是"打开某个目录"，页面点按钮时正当需要它；
+ *  `miy.app.window` 不给 —— 页面不该能自己关窗口。
+ *  `miy.accounts.token` 也**不给**：那是能直接冒充玩家的东西，只给插件用。 */
+const CORE_PAGES_OK = new Set([
+  "miy.app.info",
+  "miy.app.log",
+  "miy.app.pages",
+  "miy.app.settings",
+  "miy.app.open",
+  "miy.app.clipboard",
+  "miy.app.pickFolder",
+  "miy.app.pickFile",
+  "miy.accounts.list",
+  "miy.accounts.skin",
+  "miy.accounts.check",
+  "miy.accounts.start",
+  "miy.accounts.poll",
+  "miy.accounts.cancel",
+  "miy.accounts.logout",
+  // 多账号：切换与删除只动本地列表，不返回令牌，可以给页面用。
+  "miy.accounts.switch",
+  "miy.accounts.remove",
+  // 离线身份可以给页面看/改；`miy.accounts.identity` 带 token，故意不给。
+  "miy.accounts.offline",
+  "miy.accounts.offline.set",
+]);
+
+function allowedFor(plugin, service) {
+  if (typeof service !== "string" || !service) return false;
+  if (CORE_PAGES_OK.has(service)) return true;
+  return service.startsWith(plugin + ".");
+}
+
+/* 页面 HTML 缓存：切回来时先出内容，网络/宿主抖动也不至于白屏。 */
+const pageCache = new Map();
+
+/* 取页面：失败重试一次；两次都失败就把上次的 HTML 拿出来用。 */
+async function fetchPage(plugin, id) {
+  let last = null;
+  for (let i = 0; i < 2; i++) {
+    try {
+      const r = await api("miy.app.page", { plugin, id }, 15000);
+      if (r && r.ok) return r;
+      last = r;
+    } catch (e) {
+      last = { ok: false, error: (e && e.message) || String(e) };
+    }
+    if (i === 0) await new Promise(res => setTimeout(res, 350));
+  }
+  return last;
+}
+
+async function viewPage(box, key) {
+  const alive = pageFrames.get(key);
+  if (alive) { box.append(alive); return; }
+  const qm = key.indexOf("?");
+  const path = qm < 0 ? key : key.slice(0, qm);
+  const query = qm < 0 ? "" : key.slice(qm + 1);
+  const slash = path.indexOf("/");
+  if (slash < 0) { box.append(mk("div", "empty", "页面地址无效")); return; }
+  const plugin = path.slice(0, slash);
+  const id = path.slice(slash + 1);
+
+  const cacheKey = plugin + "/" + id;
+  let r = await fetchPage(plugin, id);
+  if (!r || !r.ok) {
+    const cached = pageCache.get(cacheKey);
+    if (cached) {
+      r = cached;
+    } else {
+      box.append(mk("div", "empty", (r && r.error) || "无法打开该页面"));
+      return;
+    }
+  } else {
+    pageCache.set(cacheKey, r);
+  }
+
+  const frame = document.createElement("iframe");
+  frame.className = "plugpage";
+  frame.setAttribute("sandbox", "allow-scripts");
+  frame.title = r.title || id;
+  frame.srcdoc = injectBridge(r.html || "", query);
+  pageFrames.set(key, frame);
+  box.append(frame);
+
+  // 页面加载完才知道 contentWindow 是哪个；此时绑定归属，随后每次调用都比对。
+  const bind = () => { if (frame.contentWindow) framed.set(frame.contentWindow, plugin); };
+  bind();
+  frame.addEventListener("load", bind);
+}
+
+/* 页面发来的调用：只认自己挂上去的 frame，只放行允许的服务。 */
+window.addEventListener("message", async e => {
+  const d = e.data;
+  if (!d || d.miy !== 1) return;
+  if (d.kind !== "call" && d.kind !== "goto") return;
+  const plugin = framed.get(e.source);
+  if (!plugin) return;
+  if (d.kind === "goto") {
+    // 只允许跳到自己的页面：插件页面不许把外壳导航到别处。
+    const v = String(d.view || "");
+    if (v.startsWith("page:" + plugin + "/")) showView(v);
+    return;
+  }
+  const reply = (ok, payload) => {
+    try { e.source.postMessage({ miy: 1, kind: "reply", id: d.id, ok, payload }, "*"); } catch (_) {}
+  };
+  if (!allowedFor(plugin, d.service)) {
+    snack("已阻止页面调用 " + d.service, "err");
+    reply(false, { code: "forbidden", message: "当前页面无权调用 " + d.service });
+    return;
+  }
+  try {
+    reply(true, await api(d.service, d.req || {}, d.timeout || 20000));
+  } catch (err) {
+    reply(false, { code: err.code || "error", message: err.message || String(err) });
+  }
+});
+
+/** 总线事件也转给插件页面：页面要显示进度、日志，全靠这一条。 */
+function broadcastEvent(topic, payload) {
+  for (const [win, plugin] of framed) {
+    // 页面可能已经被换掉：对着死掉的 window 发消息要么白费、要么抛异常。
+    // 顺手清掉，免得 framed 里越攒越多死窗口。
+    if (!win || win.closed) { framed.delete(win); continue; }
+    try { win.postMessage({ miy: 1, kind: "event", topic, payload, plugin }, "*"); } catch (_) { framed.delete(win); }
+  }
+}
+
+/* ---------- 插件 ---------- */
+async function viewPlugins(box) {
+  const r = await api("miy.app.plugins");
+  const list = r.plugins || [];
+  const running = list.filter(p => p.started && !p.faulted).length;
+
+  const head = mk("div", "head");
+  head.append(mk("h1", null, "插件"));
+  head.append(mk("div", "sub",
+    list.length ? `已安装 ${list.length} 个插件` : "暂无已安装的插件"));
+  box.append(head);
+
+  const card = mk("div", "card");
+  if (!list.length) {
+    card.append(mk("div", "empty", "插件安装后会显示在这里。"));
+  }
+  for (const p of list) {
+    const item = mk("div", "item");
+    item.title = p.dir || "";
+    const av = mk("div", "avatar", (p.id || "?").replace(/^miy[-_.]?/, "").charAt(0).toUpperCase() || "?");
+    const g = mk("div", "grow");
+    const nm = mk("div", "name", p.id);
+    nm.append(mk("span", "ver", "v" + (p.version || "?")));
+    g.append(nm);
+    g.append(mk("div", "sub", p.faulted ? "已停止，重启启动器后恢复" : (p.dir === "启动器内置" ? "启动器内置" : "外部插件")));
+    const st = mk("div", "state" + (p.faulted ? " bad" : ""));
+    st.append(mk("span", "dot"));
+    st.append(document.createTextNode(p.faulted ? "已停止" : (p.started ? "已启用" : "已安装")));
+    item.append(av, g, st);
+    card.append(item);
+  }
+  box.append(card);
+}
+
+/* ---------- 设置 ---------- */
+function ownerLabel(owner) {
+  if (!owner || owner === "core") return "核心";
+  return owner;
+}
+
+async function viewSettings(box) {
+  const r = await api("miy.app.settings");
+  const schema = r.schema || [];
+  const values = r.values || {};
+
+  const head = mk("div", "head");
+  head.append(mk("h1", null, "设置"));
+  head.append(mk("div", "sub", "不同插件的设置分别保存，互不影响。"));
+  box.append(head);
+
+  // 谁的配置谁一页：宿主的核心项和每个插件各占一格，绝不摊在同一张列表里。
+  const owners = [];
+  for (const f of schema) {
+    const o = f.owner || "core";
+    if (!owners.includes(o)) owners.push(o);
+  }
+  // 核心在前，插件按 id 排：谁的东西一眼看清。
+  owners.sort((a, b) => (a === "core" ? -1 : b === "core" ? 1 : a.localeCompare(b)));
+  if (activeOwner && !owners.includes(activeOwner)) activeOwner = null;
+  const cur = activeOwner || owners[0] || null;
+
+  if (owners.length > 1) {
+    const chips = mk("div", "owners");
+    for (const o of owners) {
+      const b = mk("button", "chip" + (o === cur ? " on" : ""), ownerLabel(o));
+      b.onclick = () => { activeOwner = o; animNext(); render(); };
+      chips.append(b);
+    }
+    box.append(chips);
+  }
+
+  if (cur) {
+    const mine = schema.filter(f => (f.owner || "core") === cur);
+    const groups = new Map();
+    for (const f of mine) {
+      const g = f.group || "其他";
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(f);
+    }
+    for (const [gname, fields] of groups) {
+      const card = mk("div", "card");
+      if (cur !== "core" || groups.size > 1) card.append(mk("div", "glabel", gname));
+      for (const f of fields) card.append(settingRow(f, values[f.key]));
+      box.append(card);
+    }
+  } else {
+    box.append(mk("div", "empty", "暂无可配置项。"));
+  }
+  applyDensity(values["core.ui.density"]);
+}
+
+/* 自定义下拉。原生 select 的弹层是系统画的，白底改不动，所以自己画。 */
+function dd(options, value, onPick) {
+  const wrap = mk("div", "dd");
+  const btn = mk("button", "dd-btn");
+  btn.type = "button";
+  let cur = String(value ?? options[0] ?? "");
+  const txt = mk("span", null, cur);
+  btn.append(txt, mk("i", "dd-arrow"));
+  const menu = mk("div", "dd-menu");
+  for (const opt of options) {
+    const o = mk("button", "dd-opt" + (String(opt) === cur ? " on" : ""), String(opt));
+    o.type = "button";
+    o.onclick = (e) => {
+      e.stopPropagation();
+      cur = String(opt);
+      txt.textContent = cur;
+      for (const c of menu.children) c.classList.toggle("on", c.textContent === cur);
+      wrap.classList.remove("open");
+      onPick(cur);
+    };
+    menu.append(o);
+  }
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    for (const d of document.querySelectorAll(".dd.open")) {
+      if (d !== wrap) d.classList.remove("open");
+    }
+    wrap.classList.toggle("open");
+  };
+  wrap.append(btn, menu);
+  return wrap;
+}
+document.addEventListener("click", () => {
+  for (const d of document.querySelectorAll(".dd.open")) d.classList.remove("open");
+});
+
+/* 内存这类「越大越好、但有上限」的设置用滑杆：拖的时候数字跟着走，松手才落盘。 */
+let SYS_MEM = null;
+async function sysMem() {
+  if (SYS_MEM) return SYS_MEM;
+  try {
+    const r = await api("miy.app.info");
+    SYS_MEM = (r && r.memory) || { total: 0, avail: 0 };
+  } catch (e) {
+    SYS_MEM = { total: 0, avail: 0 };
+  }
+  return SYS_MEM;
+}
+
+function slider(f, v) {
+  const wrap = mk("div", "slider");
+  const range = mk("input");
+  range.type = "range";
+  const step = f.step || 1;
+  const lo = f.min === undefined || f.min === null ? 0 : f.min;
+  // 上限按本机物理内存封顶（和 PCL2 一样），取不到就退回 schema 的上限。
+  let hi = f.max === undefined || f.max === null ? 65536 : f.max;
+  const mem = SYS_MEM;
+  if (mem && mem.total > 0) {
+    const cap = Math.floor(mem.total / step) * step;
+    if (cap >= lo + step) hi = Math.min(hi, cap);
+  }
+  range.min = lo;
+  range.max = hi;
+  range.step = step;
+  range.value = v == null ? lo : v;
+
+  const rail = mk("div", "rail");
+  const track = mk("div", "track");
+  const fill = mk("i");
+  track.append(fill);
+  rail.append(track, range);
+
+  const val = mk("span", "sv", "");
+  const hint = mk("span", "hint", "");
+  const THUMB = 16;
+  const paint = () => {
+    const n = Number(range.value) || 0;
+    val.textContent = n >= 1024 ? (n / 1024).toFixed(n % 1024 ? 1 : 0) + " GB" : n + " MB";
+    val.title = n + " MB";
+    const ratio = hi > lo ? Math.min(1, Math.max(0, (n - lo) / (hi - lo))) : 0;
+    // 滑块圆心能走到的范围是 [THUMB/2, 宽 - THUMB/2]，填充按圆心位置画，才不会和滑块错开
+    const w = rail.clientWidth || 0;
+    fill.style.width = (THUMB / 2 + ratio * Math.max(0, w - THUMB)).toFixed(1) + "px";
+  };
+  paint();
+  // 只有用户真的碰过滑杆才保存：程序化改 value / 改 max 触发的 change 一律忽略，
+  // 否则页面一渲染就可能把上限写进设置里。
+  let touched = false;
+  range.addEventListener("pointerdown", () => { touched = true; });
+  range.addEventListener("keydown", () => { touched = true; });
+  range.oninput = paint;
+  range.onchange = () => {
+    if (!touched) return;
+    save(f.key, range.value, f);
+  };
+
+  wrap.append(rail, val, hint);
+  // 窗口尺寸变了要重算一次，否则填充会停在旧宽度
+  window.addEventListener("resize", paint);
+  sysMem().then((m) => {
+    if (!m || !m.total) return;
+    const gb = (n) => (n / 1024).toFixed(n % 1024 ? 1 : 0) + " GB";
+    hint.textContent = "本机 " + gb(m.total) + "，可用 " + gb(m.avail);
+    // 拿到内存后再校正一次上限
+    const cap = Math.floor(m.total / step) * step;
+    if (cap >= lo + step && cap < hi) {
+      hi = cap;
+      range.max = hi;
+      if (Number(range.value) > hi) range.value = hi;
+      paint();
+    }
+  });
+  return wrap;
+}
+
+function settingRow(f, value) {
+  const row = mk("div", "field");
+  const lbl = mk("div", "lbl");
+  lbl.append(mk("b", null, f.title || f.key));
+  if (f.description) lbl.append(mk("i", null, f.description));
+  row.append(lbl);
+
+  const v = value === undefined ? f.default : value;
+  let ctl;
+
+  if (f.type === "bool") {
+    ctl = mk("label", "switch");
+    const cb = mk("input");
+    cb.type = "checkbox";
+    cb.checked = !!v;
+    cb.onchange = () => save(f.key, cb.checked, f);
+    ctl.append(cb, mk("i"));
+  } else if (Array.isArray(f.enum) && f.enum.length) {
+    ctl = dd(f.enum, v, (next) => save(f.key, next, f));
+  } else if (f.control === "slider" && (f.type === "int" || f.type === "float" || f.type === "number")) {
+    ctl = slider(f, v);
+  } else if (f.type === "int" || f.type === "float" || f.type === "number") {
+    ctl = mk("input");
+    ctl.type = "number";
+    if (f.min !== undefined && f.min !== null) ctl.min = f.min;
+    if (f.max !== undefined && f.max !== null) ctl.max = f.max;
+    ctl.step = f.type === "float" ? "any" : "1";
+    ctl.value = v;
+    ctl.onchange = () => save(f.key, ctl.value, f);
+  } else {
+    ctl = mk("input");
+    ctl.type = "text";
+    ctl.value = v == null ? "" : v;
+    ctl.onchange = () => save(f.key, ctl.value, f);
+    // 目录类设置给一个系统选择器：路径这种东西不该让人手打
+    if (f.key === "miy.mc.root") {
+      const wrap = mk("div", "pickrow");
+      const btn = mk("button", "pick", "浏览…");
+      btn.type = "button";
+      btn.onclick = async () => {
+        const r = await api("miy.app.pickFolder", { title: "选择游戏目录" }, 600000);
+        if (r && r.ok && r.path) {
+          ctl.value = r.path;
+          await save(f.key, r.path, f);
+        }
+      };
+      wrap.append(ctl, btn);
+      ctl = wrap;
+    }
+  }
+  row.append(ctl);
+
+  if (String(v) !== String(f.default)) {
+    const rst = mk("button", "reset", "恢复默认");
+    rst.onclick = async () => {
+      await api("miy.app.setting.reset", { key: f.key });
+      render();
+    };
+    row.append(rst);
+  }
+  return row;
+}
+
+async function save(key, raw, f) {
+  try {
+    // 宿主拒绝时返回的是 {ok:false,error}，不是异常 —— 以前这里只看有没有抛错，
+    // 所以"选了别的选项"看起来完全没反应。
+    const r = await api("miy.app.setting.set", { key, value: raw });
+    if (r && r.ok === false) {
+      snack(r.error || "该设置值无效", "err");
+      render();
+      return;
+    }
+    if (f && f.key === "core.ui.density") applyDensity(raw);
+    snack("已保存", "");
+  } catch (e) {
+    snack(e.message || "保存失败", "err");
+    render();
+  }
+}
+
+function applyDensity(v) {
+  // 只认传进来的值：事件里只带被改的那一项，别的设置改动不该顺手改密度。
+  if (v === undefined) return;
+  document.body.classList.toggle("compact", v === "compact");
+}
+
+/* ---------- 事件 ---------- */
+if (!window.miy) {
+  document.getElementById("view").textContent =
+    "界面未能连接到后台服务，请重启启动器。";
+} else miy.onEvent(({ topic, payload }) => {
+  broadcastEvent(topic, payload);
+
+  if (topic === "host.error") snack(payload || "发生错误", "err");
+  if (topic === "settings.changed" && payload && payload.key === "core.ui.density") applyDensity(payload.value);
+  if ((topic === "plugin.loaded" || topic === "plugin.failed" || topic === "plugins.loaded") && view === "plugins") {
+    clearTimeout(refreshT);
+    refreshT = setTimeout(render, 120);
+  }
+});
+
+/* ---------- 窗口按钮与拖动 ---------- */
+document.querySelectorAll(".wctl button").forEach(b => {
+  b.addEventListener("click", () => { miy.call("miy.app.window", { action: b.dataset.a }); });
+});
+
+// 没有最大化按钮了，顶栏双击也就不该再改窗口状态（拖拽仍然只在按下时触发）
+document.querySelector(".appbar").addEventListener("mousedown", e => {
+  if (e.button !== 0) return;
+  if (e.target.closest("button")) return;
+  miy.call("miy.app.window", { action: "drag" });
+});
+
+/* ---------- 启动 ---------- */
+(async function boot() {
+  try {
+    const r = await api("miy.app.pages");
+    pages = (r && r.pages) || [];
+  } catch (e) {
+    pages = [];
+  }
+  if (window.__MiyOwner) activeOwner = window.__MiyOwner;
+  buildNav();
+
+  const home = pages.find(p => p.slot === "home");
+  if (window.__MiyOpenTab) showView(window.__MiyOpenTab);
+  else if (home) showView(pageKey(home));
+  else showView("plugins");
+})();
+
+/* ---------- 任务面板 ---------- */
+let taskOpen = false;
+let taskTimer = 0;
+
+function mb(n) {
+  if (!n) return "";
+  return (n / 1048576).toFixed(1) + " MB";
+}
+
+function taskPct(t) {
+  // 插件给的是千分比（0..1000），这里统一换算成整数百分比。
+  if (typeof t.percent === "number") return Math.max(0, Math.min(100, Math.round(t.percent / 10)));
+  if (t.total) return Math.max(0, Math.min(100, Math.round((t.done || 0) / t.total * 100)));
+  return 0;
+}
+
+async function cancelTask(id) {
+  try {
+    const r = await api("miy.mc.task.cancel", { id }, 8000);
+    snack(r && r.ok ? "正在取消" : "该任务已无法取消", r && r.ok ? "" : "err");
+  } catch (e) {
+    snack("取消失败", "err");
+  }
+  pollTasks();
+}
+
+function paintTasks(list, running) {
+  const box = $("#tasks");
+  box.replaceChildren();
+  box.append(mk("h4", null, running ? "正在下载（" + running + " 个任务）" : "任务"));
+  if (!list.length) {
+    box.append(mk("div", "empty", "暂无下载任务。"));
+    return;
+  }
+  for (const t of list.slice().reverse()) {
+    const mine = t.state === "running" || t.state === "cancelling";
+    const row = mk("div", "task" + (t.state === "failed" ? " bad" : "") + (mine ? " live" : ""));
+    const head = mk("div", "thead");
+    head.append(mk("div", "t", t.title || "任务"));
+    if (mine && t.cancellable !== false) {
+      const x = mk("button", "tk-cancel", t.state === "cancelling" ? "正在取消" : "取消");
+      if (t.state === "cancelling") x.disabled = true;
+      else x.onclick = () => cancelTask(t.id);
+      head.append(x);
+    }
+    row.append(head);
+
+    let line;
+    if (mine) {
+      line =
+        taskPct(t) + "%，" + (t.done || 0) + " / " + (t.total || 0) + " 个文件" +
+        (mb(t.bytes) ? "，" + mb(t.bytes) : "");
+    } else if (t.state === "failed") {
+      line = "失败" + (t.error ? "：" + t.error : "");
+    } else if (t.state === "cancelled") {
+      line = t.error || "已取消，本次下载的文件已清理";
+    } else {
+      line = "已完成，" + (t.total || 0) + " 个文件" + (mb(t.bytes) ? "，" + mb(t.bytes) : "");
+    }
+    row.append(mk("div", "m", line));
+
+    if (mine) {
+      const bar = mk("div", "p");
+      const fill = document.createElement("i");
+      fill.style.width = taskPct(t) + "%";
+      bar.append(fill);
+      row.append(bar);
+    }
+    box.append(row);
+  }
+}
+
+/** 轮询任务表：下载可能由任何页面发起，甚至发起它的页面已经不在了。 */
+async function pollTasks() {
+  let r = null;
+  try {
+    r = await api("miy.mc.tasks", {}, 4000);
+  } catch (e) {
+    r = null;
+  }
+  const fab = $("#fab");
+  const badge = $("#fabbadge");
+  if (!r || !r.ok) {
+    fab.hidden = true;
+    return;
+  }
+  const list = r.tasks || [];
+  const running = list.filter(x => x.state === "running").length;
+  // 只在真有任务在跑（或用户主动开着面板）时出现：任务一结束就收起，
+  // 免得右下角常驻一个来路不明的按钮。
+  const live = list.filter(x => x.state === "running" || x.state === "cancelling");
+  fab.hidden = live.length === 0 && !(taskOpen && list.length > 0);
+  if (fab.hidden) { taskOpen = false; $("#tasks").hidden = true; }
+  badge.hidden = running === 0;
+  // 只有一个任务时角标直接显示百分比，比一个 "1" 有用得多。
+  badge.textContent = live.length === 1 ? taskPct(live[0]) + "%" : String(running);
+  fab.title = live.length ? "正在下载（" + live.length + " 个任务）" : "任务";
+  if (taskOpen) paintTasks(list, running);
+}
+
+$("#fab").onclick = () => {
+  taskOpen = !taskOpen;
+  $("#tasks").hidden = !taskOpen;
+  if (taskOpen) pollTasks();
+};
+
+setInterval(pollTasks, 2500);
+pollTasks();
+
+__OPEN_TAB__
+</script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/miy-abi",
+    "crates/miy-host",
+    "plugins/miy-hello",
+    "plugins/miy-boom",
+    "plugins/miy-mc",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+
+[workspace.dependencies]
+miy-abi = { path = "crates/miy-abi" }
+# 核心启动插件也被宿主静态链接进 exe（见 crates/miy-host/src/embedded.rs）。
+# 它依旧能用 `--profile plugin` 单独编成 dll，外置跑法不变。
+miy-mc = { path = "plugins/miy-mc" }
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+# 解压老版本 natives 包（zip 里的 deflate 流）用；纯 Rust 实现，不牵 zlib。
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+# 宿主：与插件同一个 panic 策略。
+#
+# 原来这里是 `abort`，理由是"不为 unwind 表付出体积"。miy.mc 编进 exe 之后这个
+# 理由失效了：核心插件里的 `catch_panic` 在 `abort` 下抓不住 panic，一次越界
+# 索引就能把整个启动器带走（docs/plugin-dev.md §反模式 第 9 条正是这个）。
+# 实测换成 unwind 只多一百多 KB，换"插件炸了窗口还在、只熔断该插件"是值的。
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+debug = false
+incremental = false
+
+# 插件：必须 unwind。panic 必须在插件内部被 catch_unwind 挡住，
+# 不得跨过 FFI 边界（docs/architecture.md §4 第 6 条）。
+[profile.plugin]
+inherits = "release"
+panic = "unwind"

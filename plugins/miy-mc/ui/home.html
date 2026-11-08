@@ -1,0 +1,931 @@
+<!doctype html>
+<meta charset="utf-8">
+<!--
+  这是 miy.mc 自己的首页，由宿主装进 sandbox iframe 里跑。
+  版式、配色、交互都在这个文件里 —— 换掉它不需要重新编译启动器。
+
+  版式是「左主右辅」：左边只有一块重点区（当前版本 + 启动），右边只有账号，
+  其余一切都退到次级。信息少是刻意的，别往两边堆状态。
+-->
+<style>
+  :root{
+    --surface:#f9f9ff; --low:#f3f3fa; --lowest:#fff; --cont:#ededf4; --high:#e7e8ee;
+    --on:#191c20; --on-var:#44474e; --outline:#74777f; --outline-var:#c4c6d0;
+    --primary:#415f91; --on-primary:#fff;
+    --p-cont:#d6e3ff; --on-p-cont:#001b3e;
+    --s-cont:#dae2f9; --on-s-cont:#131c2b;
+    --ok:#146c2e; --err:#ba1a1a;
+    --font:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","Noto Sans SC",system-ui,sans-serif;
+    --display:"Segoe UI Variable Display","Segoe UI Variable Text",var(--font);
+    --e1:0 1px 2px rgba(16,24,40,.06);
+    --ease-std:cubic-bezier(.2,0,0,1);
+    --ease-dec:cubic-bezier(.05,.7,.1,1);
+    --d-short:120ms; --d-med:220ms; --d-long:320ms;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%; overflow:hidden}
+  @keyframes riseIn{from{opacity:0; transform:translateY(10px)} to{opacity:1; transform:none}}
+  body{
+    margin:0; padding:18px 20px 14px; background:var(--low); color:var(--on);
+    font:400 14px/20px var(--font); color-scheme:light; -webkit-font-smoothing:antialiased;
+    display:flex; flex-direction:column; gap:14px;
+  }
+
+  /* 左主右辅。右栏窄，只放账号；多出来的东西一律不往这儿塞。 */
+  .wrap{flex:1 1 auto; min-height:0; display:grid; grid-template-columns:minmax(0,1fr) 244px; gap:18px}
+  .main{min-width:0; min-height:0; display:flex; flex-direction:column; gap:14px}
+
+  .card{background:var(--lowest); border-radius:20px; box-shadow:var(--e1); border:1px solid #ececf4}
+
+  /* ---------- 重点区：整页唯一的主卡 ---------- */
+  .focus{
+    display:flex; flex-direction:column; justify-content:center; gap:0; flex:1 1 auto; min-height:0;
+    padding:30px 34px; position:relative; z-index:1;
+    animation:riseIn var(--d-long) var(--ease-dec) both;
+  }
+  /* 下拉展开时整张卡浮起来，否则弹层会被后面的元素压住 */
+  .focus:has(.dd.open){z-index:60}
+  .kicker{
+    display:flex; align-items:center; gap:10px;
+    font-size:12px; color:var(--on-var); letter-spacing:.01em;
+  }
+  .verno{
+    margin:10px 0 6px; font:600 44px/52px var(--display);
+    letter-spacing:-.02em; color:var(--on);
+  }
+  .verno.empty{color:var(--outline); font-size:30px; line-height:40px}
+  .line{
+    margin:0; display:flex; flex-wrap:wrap; gap:14px;
+    font-size:12.5px; color:var(--on-var); min-height:18px;
+  }
+  .actions{display:flex; align-items:center; gap:12px; margin-top:26px; flex-wrap:wrap}
+
+  /* ---------- 版本列表：默认不出现，装了 2 个以上才露头 ---------- */
+  .list{margin-top:18px; padding:6px; max-height:180px; overflow:auto; border-radius:16px}
+  .vrow{
+    display:flex; align-items:center; gap:10px; width:100%; height:44px; padding:0 12px;
+    border:0; background:none; border-radius:10px; text-align:left; color:inherit; cursor:pointer;
+    font:inherit;
+  }
+  .vrow:hover{background:var(--high)}
+  .vrow.on{background:var(--s-cont)}
+  .vrow .vname{font-size:13px; font-weight:500}
+  .vrow .vnote{font-size:11.5px; color:var(--on-var); margin-left:auto}
+
+  /* ---------- 右栏 ---------- */
+  .aside{display:flex; flex-direction:column; gap:12px; min-width:0}
+  .acctwrap{position:relative; z-index:3; isolation:isolate}
+  .acct-list{display:flex; flex-direction:column; gap:2px; margin:2px 0 4px}
+.acct-list:empty{display:none}
+.acct-row{display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:10px;
+  cursor:pointer; font-size:13px; color:var(--on)}
+.acct-row:hover{background:var(--low)}
+.acct-row.on{background:var(--p-cont)}
+.acct-row .nm{flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.acct-row .kd{font-size:11px; color:var(--on-var); background:var(--cont); border-radius:6px; padding:1px 6px}
+.acct-row .rm{border:none; background:transparent; color:var(--on-var); cursor:pointer;
+  font-size:15px; line-height:1; padding:2px 4px; border-radius:6px}
+.acct-row .rm:hover{background:var(--high); color:var(--error)}
+.acct-menu{
+    position:relative; margin-top:8px;
+    display:flex; flex-direction:column; gap:2px; padding:6px;
+    background:#fff; border-radius:12px; box-shadow:var(--e1);
+    border:1px solid #ececf4;
+    animation:ddIn var(--d-short) var(--ease-dec) both;
+  }
+  .acct-menu button{
+    text-align:left; border:0; background:transparent; cursor:pointer;
+    font:400 13px/1 var(--font); color:var(--on); padding:10px 12px; border-radius:8px;
+  }
+  .acct-menu button:hover{background:var(--high)}
+  .acct-menu button.danger:hover{background:var(--e-cont); color:var(--on-e-cont)}
+  .acct{
+    display:flex; align-items:center; gap:11px; width:100%; padding:14px;
+    border:1px solid #ececf4; background:var(--lowest); border-radius:16px;
+    box-shadow:var(--e1); cursor:pointer; color:inherit; font:inherit; text-align:left;
+    transition:background var(--d-short) var(--ease-std), transform var(--d-short) var(--ease-std);
+    animation:riseIn var(--d-long) var(--ease-dec) both;
+  }
+  .acct:hover{background:#fff; border-color:var(--outline-var)}
+  .acct:active{transform:scale(.99)}
+  .ava{
+    width:36px; height:36px; border-radius:10px; flex:0 0 auto; display:grid; place-items:center;
+    background:var(--s-cont); color:var(--on-s-cont); font-weight:500; font-size:14px;
+    position:relative; overflow:hidden;
+  }
+  .ava.on{background:var(--primary); color:#fff}
+  /* 皮肤是 64x64 的图，头部在 (8,8) 的 8x8 方块里；36px 头像按 4.5 倍放大后
+     背景图铺成 288px，偏移 -36px 正好把头部对准。帽子层在 (40,8)。
+     按用户要求：方形、不切角，整颗头完整显示。 */
+  .ava.skin{background-color:#c9d3e6; background-size:288px 288px; background-position:-36px -36px;
+    background-repeat:no-repeat; image-rendering:pixelated; color:transparent; border-radius:0}
+  .ava.skin::after{
+    content:""; position:absolute; inset:0;
+    background-image:inherit; background-size:288px 288px; background-position:-180px -36px;
+    background-repeat:no-repeat; image-rendering:pixelated;
+  }
+  /* 账号列表里的小头像 */
+  .acct-row .ava{width:24px; height:24px; border-radius:7px; font-size:11px}
+  .acct-row .ava.skin{background-size:192px 192px; background-position:-24px -24px; border-radius:7px}
+  .acct-row .ava.skin::after{background-size:192px 192px; background-position:-120px -24px}
+  .acct b{display:block; font-size:13px; font-weight:500; line-height:18px}
+  .mut{color:var(--on-var); font-size:11.5px; line-height:16px}
+
+  /* 打开目录这种一个月点一次的，用纯文字按钮垫在最下面 */
+  .side{display:flex; flex-direction:column; gap:6px; padding:0 4px}
+  .quiet{
+    background:none; color:var(--on-var); border-radius:8px; height:34px; padding:0 10px;
+    font:400 12.5px/1 var(--font); text-align:left; cursor:pointer;
+  }
+  .quiet:hover{background:var(--high); color:var(--on)}
+
+  [hidden]{display:none !important}
+
+  /* ---------- 登录面板（右栏，244px 宽） ---------- */
+  .login{
+    background:var(--lowest); border-radius:16px; padding:14px; box-shadow:var(--e1);
+    border:1px solid #ececf4;
+    display:flex; flex-direction:column; gap:9px; animation:riseIn var(--d-med) var(--ease-dec) both;
+  }
+  .login h3{margin:0; font-size:13.5px; font-weight:500; line-height:20px}
+  .login p{margin:0}
+  .login .mut{font-size:11px; line-height:15px}
+  .login .row{display:flex; flex-direction:column; gap:6px}
+.login .lbl{font-size:11px; line-height:15px; color:var(--on-var)}
+.login input{
+  width:100%; height:32px; padding:0 10px; box-sizing:border-box;
+  border:1px solid var(--outline); border-radius:8px; background:#fff;
+  color:var(--on-surface); font:400 12.5px/32px var(--font); outline:none;
+}
+.login input:focus{border-color:var(--primary); box-shadow:0 0 0 1px var(--primary)}
+  .login .row .ghost{width:100%}
+  .codebox{display:flex; align-items:center; gap:8px; background:var(--low); border-radius:10px; padding:9px 11px}
+  .codebox span{
+    flex:1 1 auto; min-width:0; word-break:break-all;
+    font:500 15px/22px ui-monospace,"Cascadia Mono",Consolas,monospace;
+    letter-spacing:.1em; color:var(--on); user-select:text;
+  }
+  .codebox .ghost{flex:0 0 auto; height:28px; padding:0 10px; font-size:12px}
+
+  /* ---------- 自定义下拉（弹层归自己画，原生 select 的白底改不动） ---------- */
+  .dd{position:relative; z-index:1; flex:0 0 auto}
+  .dd.open{z-index:80}
+  .dd-btn{
+    height:44px; min-width:186px; padding:0 36px 0 14px; border:1px solid var(--outline);
+    border-radius:12px; background:#fff; color:var(--on);
+    font:400 13.5px/20px var(--font); text-align:left; cursor:pointer; position:relative;
+    transition:border-color var(--d-short) var(--ease-std);
+  }
+  .dd-btn:hover{border-color:var(--on-var)}
+  .dd.open .dd-btn{border-color:var(--primary); border-width:2px; padding:0 35px 0 13px}
+  .dd-arrow{
+    position:absolute; right:13px; top:50%; width:9px; height:9px; margin-top:-7px;
+    border-right:1.8px solid var(--on-var); border-bottom:1.8px solid var(--on-var);
+    transform:rotate(45deg); transition:transform var(--d-short) var(--ease-std);
+  }
+  .dd.open .dd-arrow{transform:rotate(-135deg); margin-top:-3px}
+  .dd-menu{
+    position:absolute; top:calc(100% + 6px); left:0; min-width:100%; display:none; z-index:60;
+    background:#fff; border-radius:12px; padding:6px;
+    box-shadow:0 10px 28px rgba(16,24,40,.16), 0 2px 6px rgba(16,24,40,.08);
+    /* 版本一多菜单会顶出窗口：限高 + 自己滚，别让整页跟着长。 */
+    max-height:min(320px, 52vh); overflow-y:auto; overscroll-behavior:contain;
+    scrollbar-width:thin;
+  }
+  .dd-menu::-webkit-scrollbar{width:8px}
+  .dd-menu::-webkit-scrollbar-thumb{background:var(--outline); border-radius:4px}
+  .dd-menu::-webkit-scrollbar-track{background:transparent}
+  .dd.open .dd-menu{display:block; animation:ddIn var(--d-short) var(--ease-dec)}
+  /* 下面放不下时翻到按钮上方 */
+  .dd.up .dd-menu{top:auto; bottom:calc(100% + 6px)}
+  .dd.up .dd-menu{animation-name:ddInUp}
+  @keyframes ddInUp{from{opacity:0; transform:translateY(4px)} to{opacity:1; transform:none}}
+  @keyframes ddIn{from{opacity:0; transform:translateY(-4px)} to{opacity:1; transform:none}}
+  .dd-opt{
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    width:100%; height:38px; padding:0 12px; border:0; border-radius:8px;
+    background:none; color:var(--on); font:400 13px/20px var(--font);
+    text-align:left; cursor:pointer; white-space:nowrap;
+  }
+  .dd-opt:hover{background:var(--high)}
+  .dd-opt.on{background:var(--s-cont); color:var(--on-s-cont)}
+  .dd-opt em{font-style:normal; font-size:11px; color:var(--on-var)}
+
+  button{font:inherit; font-size:13px; cursor:pointer; border:0;
+         transition:box-shadow .13s,background var(--d-short) var(--ease-std),transform var(--d-short) var(--ease-std)}
+
+  /* 整页唯一的填充按钮 */
+  .launch{
+    background:var(--primary); color:var(--on-primary); border-radius:14px; height:48px;
+    padding:0 34px; font-size:15px; font-weight:500; letter-spacing:.01em;
+  }
+  .launch:hover:not(:disabled){box-shadow:0 2px 12px rgba(65,95,145,.32)}
+  .launch:active:not(:disabled){transform:scale(.985)}
+  .launch:disabled{opacity:.4; cursor:default; box-shadow:none}
+
+  .ghost{
+    background:transparent; color:var(--primary); border:1px solid var(--outline-var);
+    border-radius:10px; height:36px; padding:0 14px; font-weight:500;
+  }
+  .ghost:hover{background:var(--p-cont); color:var(--on-p-cont); border-color:transparent}
+  .ghost:active{transform:scale(.97)}
+
+  .pill{
+    display:inline-flex; align-items:center; font-size:12px; font-weight:500;
+    color:var(--on-p-cont); background:var(--p-cont); border-radius:8px; padding:3px 10px;
+  }
+
+  /* 状态行：只留最近一句，贴底当状态栏 */
+  .status{
+    margin:0; padding:12px 18px; background:var(--lowest); border-radius:14px;
+    box-shadow:var(--e1); border:1px solid #ececf4;
+    font:400 12.5px/18px var(--font); color:var(--on-var);
+    display:flex; align-items:center; gap:10px; flex:0 0 auto;
+  }
+  .status::before{content:""; width:7px; height:7px; border-radius:50%; background:var(--outline); flex:0 0 auto}
+  .status.on::before{background:var(--ok)}
+  .status.bad::before{background:var(--err)}
+  .status.bad{color:var(--err)}
+
+  /* 窗口窄的时候右栏掉到下面，别把主区挤死 */
+  @media (max-width:760px){
+    .wrap{grid-template-columns:1fr}
+    .aside{flex-direction:row; align-items:center}
+    .acct{flex:1 1 auto}
+    .side{margin-top:0}
+  }
+
+  /* 崩溃窗口 */
+  .crash{
+    position:fixed; inset:0; z-index:200; display:flex; align-items:center; justify-content:center;
+    background:rgba(16,24,40,.42); padding:24px;
+  }
+  /* display:flex 会盖掉浏览器默认的 [hidden]{display:none}，必须显式关掉 */
+  .crash[hidden]{display:none}
+  .crash-box{
+    width:min(720px, 100%); max-height:100%; display:flex; flex-direction:column; gap:10px;
+    background:#fff; border-radius:16px; padding:20px;
+    box-shadow:0 24px 60px rgba(16,24,40,.28);
+  }
+  .crash-box h3{margin:0; font:500 16px/24px var(--font); color:var(--on)}
+  .crash-reason{
+    margin:0; padding:10px 12px; border-radius:10px; background:#ffdad6;
+    color:#8c1d18; font:400 13px/20px var(--font); word-break:break-word;
+  }
+  .crash-log{
+    margin:0; flex:1 1 auto; min-height:120px; max-height:46vh; overflow:auto;
+    background:var(--low); border-radius:10px; padding:12px;
+    font:400 12px/18px ui-monospace, Consolas, monospace; color:var(--on);
+    white-space:pre-wrap; word-break:break-all;
+  }
+  .crash-row{display:flex; gap:8px; justify-content:flex-end; flex:0 0 auto}
+</style>
+
+<script>
+  // 先挂错误处理，再放后面的脚本：语法错误也要能被看见，而不是留一页白板。
+  window.addEventListener("error", e => {
+    const p = document.getElementById("status");
+    if (p) { p.textContent = "界面加载失败：" + (e.message || e); p.className = "status bad"; }
+  });
+</script>
+
+<div class="wrap">
+  <section class="main">
+    <section class="card focus">
+      <div class="kicker">
+        <span>当前版本</span>
+        <span id="tag" class="pill" hidden></span>
+      </div>
+      <div class="verno" id="verno">—</div>
+      <p class="line" id="verinfo"></p>
+      <p class="line mut" id="javainfo"></p>
+
+      <div class="actions">
+        <button class="launch" id="go">启动游戏</button>
+        <div class="dd" id="verdd"></div>
+      </div>
+    </section>
+  </section>
+
+  <aside class="aside">
+    <div class="acctwrap">
+      <button class="acct" id="acct" title="账号">
+        <div class="ava" id="ava">?</div>
+        <div style="min-width:0">
+          <b id="acctName">未登录</b>
+          <div class="mut" id="acctSub">以离线身份游玩</div>
+        </div>
+      </button>
+      <div class="acct-menu" id="acctMenu" hidden>
+        <button id="loginBtn">登录 Microsoft 账号</button>
+        <button id="editOffline">编辑离线档案</button>
+        <div class="acct-list" id="acctList"></div>
+        <button id="signOut" class="danger">退出登录</button>
+      </div>
+    </div>
+
+    <div class="login" id="offlineBox" hidden>
+      <h3>离线档案</h3>
+      <p class="mut">离线游玩时使用的玩家名与身份标识，仅对单机与离线服务器有效。</p>
+      <label class="lbl" for="offName">玩家名</label>
+      <input id="offName" maxlength="16" spellcheck="false" placeholder="Player" />
+      <label class="lbl" for="offUuid">UUID</label>
+      <input id="offUuid" spellcheck="false" placeholder="留空时根据玩家名自动生成" />
+      <div class="row">
+        <button class="ghost" id="offSave">保存</button>
+        <button class="ghost" id="offCancel">取消</button>
+      </div>
+      <p class="mut" id="offState">名字 3–16 位，只能用字母、数字、下划线。</p>
+    </div>
+
+    <div class="login" id="login" hidden>
+      <h3>登录 Microsoft 账号</h3>
+      <p class="mut" id="loginTip">正在准备…</p>
+      <div class="codebox" id="codebox">
+        <span id="code">————————</span>
+        <button class="ghost" id="copy">复制</button>
+      </div>
+      <div class="row">
+        <button class="ghost" id="openlink">打开登录页面</button>
+        <button class="ghost" id="cancel">取消</button>
+      </div>
+      <p class="mut" id="loginState">登录完成后会自动继续。</p>
+    </div>
+
+    <div class="side">
+      <button class="quiet" id="open">打开游戏目录</button>
+    </div>
+  </aside>
+</div>
+
+<p class="status" id="status">准备就绪，可以开始游戏。</p>
+
+<!-- 崩溃窗口：PCL2 也是把原因和日志直接摆出来，而不是只说一句"意外退出" -->
+<div class="crash" id="crash" hidden>
+  <div class="crash-box">
+    <h3 id="crashTitle">游戏崩溃了</h3>
+    <p class="crash-reason" id="crashReason"></p>
+    <pre class="crash-log" id="crashLog"></pre>
+    <div class="crash-row">
+      <button class="ghost" id="crashOpen">打开日志文件夹</button>
+      <button class="ghost" id="crashCopy">复制日志</button>
+      <button id="crashClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const $ = s => document.querySelector(s);
+  /** 状态行：只显示最近一句话，不累积历史。 */
+  const log = (s, kind) => {
+    const p = $("#status");
+    p.textContent = s;
+    p.className = "status" + (kind ? " " + kind : "");
+  };
+
+  /* 自定义下拉。items = [{value, label, note}] */
+  function dd(el, items, cur, onPick) {
+    el.replaceChildren();
+    el.classList.remove("open");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "dd-btn";
+    const txt = document.createElement("span");
+    const first = items.find(i => i.value === cur) || items[0];
+    txt.textContent = first ? first.label : "";
+    const arrow = document.createElement("i");
+    arrow.className = "dd-arrow";
+    btn.append(txt, arrow);
+
+    const menu = document.createElement("div");
+    menu.className = "dd-menu";
+    for (const it of items) {
+      const o = document.createElement("button");
+      o.type = "button";
+      o.className = "dd-opt" + (it.value === cur ? " on" : "");
+      const lab = document.createElement("span");
+      lab.textContent = it.label;
+      o.append(lab);
+      if (it.note) {
+        const em = document.createElement("em");
+        em.textContent = it.note;
+        o.append(em);
+      }
+      o.onclick = (e) => {
+        e.stopPropagation();
+        txt.textContent = it.label;
+        for (const c of menu.children) c.classList.toggle("on", c === o);
+        el.classList.remove("open");
+        onPick(it.value);
+      };
+      menu.append(o);
+    }
+
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      for (const d of document.querySelectorAll(".dd.open")) {
+        if (d !== el) d.classList.remove("open");
+      }
+      const open = el.classList.toggle("open");
+      if (open) {
+        // 菜单默认往下弹；下面放不下就翻到上面，还放不下就压高度。
+        el.classList.remove("up");
+        menu.style.maxHeight = "";
+        const r = menu.getBoundingClientRect();
+        if (r.bottom > window.innerHeight - 8) {
+          el.classList.add("up");
+          const room = btn.getBoundingClientRect().top - 14;
+          if (room < r.height) menu.style.maxHeight = Math.max(96, room) + "px";
+        }
+      }
+    };
+    el.append(btn, menu);
+  }
+  document.addEventListener("click", () => {
+    for (const d of document.querySelectorAll(".dd.open")) d.classList.remove("open");
+  });
+
+  /* 一个版本的细节。用 flex + gap 分隔，不插任何分隔符。 */
+  function detailOf(v) {
+    const parts = [];
+    const kind = v.loader && v.loader !== "原版" ? v.loader + " " + (v.loaderVer || "") : "正式版";
+    if (v.mc) parts.push("Minecraft " + v.mc + "（" + kind + "）");
+    else parts.push(kind);
+    if (v.java) parts.push("需要 Java " + v.java);
+    if (v.sizeBytes) parts.push((v.sizeBytes / 1048576).toFixed(1) + " MB");
+    if (v.released) parts.push(v.released.slice(0, 10) + " 发布");
+    return parts.join("，");
+  }
+
+  let versions = [];
+  let versionId = "";
+
+  function pickVersion(id) {
+    versionId = id;
+    const v = versions.find(x => x.id === id);
+    if (!v) return;
+    $("#verno").textContent = v.id;
+    $("#verno").classList.remove("empty");
+    $("#verinfo").textContent = detailOf(v);
+    refreshJava(id);
+  }
+
+  /* 这个版本会用哪个 Java。没有就摆一个「安装」按钮 ——
+     不该逼玩家先去装 Java，才发现这句话说的是什么。 */
+  /* Java 的来源是给维护者看的标记，界面上换成玩家能读懂的说法。 */
+  function javaSource(s) {
+    if (s === "启动器下载") return "启动器自带";
+    if (s === "JAVA_HOME" || s === "PATH") return "系统环境变量";
+    return "系统中已安装";
+  }
+
+  async function refreshJava(id) {
+    const box = $("#javainfo");
+    if (!box) return;
+    box.replaceChildren();
+    if (!id) return;
+    let r = null;
+    try { r = await miy.call("miy.mc.javas", { id }); } catch (e) { return; }
+    if (!r || !r.ok) return;
+    if (r.picked) {
+      box.textContent = "将使用 Java " + r.picked.major + "（" + javaSource(r.picked.source) + "）";
+      box.classList.add("mut");
+      box.title = r.picked.path;
+      return;
+    }
+    if (!r.required) return;
+    box.textContent = "未找到 Java " + r.required + "，启动游戏时会自动下载。";
+    const b = document.createElement("button");
+    b.className = "quiet";
+    b.textContent = "立即安装 Java " + r.required;
+    b.style.marginLeft = "8px";
+    b.onclick = async () => {
+      b.disabled = true;
+      b.textContent = "下载中…";
+      log("正在下载 Java " + r.required + "（约 100 MB），完成后会自动校验。", "busy");
+      try {
+        const got = await miy.call("miy.mc.java.install", { id }, 1800000);
+        if (got && got.ok) {
+          log("Java 已安装完成。", "on");
+          refreshJava(id);
+        } else {
+          log((got && got.error) || "安装失败。", "bad");
+          b.disabled = false;
+          b.textContent = "重试";
+        }
+      } catch (e) {
+        log("安装失败，请检查网络连接后重试。", "bad");
+        b.disabled = false;
+        b.textContent = "重试";
+      }
+    };
+    box.append(b);
+  }
+  async function boot() {
+    let r = null;
+    try { r = await miy.call("miy.mc.installed", {}); } catch (e) { r = null; }
+    versions = (r && r.versions) || [];
+    if (!versions.length) {
+      $("#verno").textContent = "尚未安装任何版本";
+      $("#verno").classList.add("empty");
+      $("#go").disabled = true;
+      $("#verdd").hidden = true;
+      log("请先在「版本」页面安装一个版本。", "bad");
+      return;
+    }
+    const items = versions.map(v => ({
+      value: v.id,
+      label: v.id,
+      note: (v.mc && v.mc !== v.id ? "MC " + v.mc + " " : "") +
+        (v.loader && v.loader !== "原版" ? v.loader : "正式版"),
+    }));
+    versionId = versions[0].id;
+    dd($("#verdd"), items, versionId, pickVersion);
+    pickVersion(versionId);
+    // 下拉常显：一个版本时也留着，方便看清"现在选的是哪个"
+    $("#tag").hidden = versions.length < 2;
+    $("#tag").textContent = versions.length + " 个版本";
+
+    // 首页只负责"选一个版本然后开"，不重复版本页的列表
+  }
+
+  let running = false;
+
+  $("#go").onclick = async () => {
+    const btn = $("#go");
+    // 启动中再点一次 = 取消启动（启动要读清单、补资源、挑 Java，慢的时候十几秒）。
+    if (running) {
+      btn.disabled = true;
+      btn.textContent = "正在取消…";
+      try { await miy.call("miy.mc.launch.cancel", {}, 15000); } catch (e) {}
+      log("已取消启动。", "on");
+      return;
+    }
+    if (!versionId) return;
+    running = true;
+    btn.textContent = "取消启动";
+    log("正在启动游戏…");
+    try {
+      let r = await miy.call("miy.mc.launch", { id: versionId, online: true }, 120000);
+      // 缺文件就别启动：MC 会在加载贴图时直接崩，用户只看到"游戏闪退"。
+      // 这里替用户补齐一次（只下缺的那些），补完再启动一次。
+      if (r && r.ok === false && r.code === "incomplete") {
+        log("该版本缺少必要文件，正在自动补齐…", "busy");
+        btn.textContent = "补齐中（点此取消）";
+        await miy.call("miy.mc.install", { id: versionId, name: versionId }, 3600000);
+        await miy.call("miy.mc.assets", { id: versionId }, 3600000);
+        btn.textContent = "取消启动";
+        r = await miy.call("miy.mc.launch", { id: versionId, online: true }, 120000);
+      }
+      if (r && r.ok) {
+        log("游戏已启动" + (r.username ? "，正在使用 " + r.username + " 的身份" : ""), "on");
+      } else if (r && r.code === "cancelled") {
+        log("已取消启动。", "on");
+      } else {
+        log((r && r.error) || "启动失败，请稍后再试。", "bad");
+        // 缺 Java 时把「安装」按钮摆出来，别让玩家自己去找。
+        if (r && r.code === "nojava") refreshJava(versionId);
+      }
+    } catch (e) {
+      log("启动失败，请稍后再试。", "bad");
+    }
+    running = false;
+    btn.disabled = false;
+    btn.textContent = "启动游戏";
+  };
+
+  $("#open").onclick = () => { miy.call("miy.app.open", { what: "game" }).catch(() => {}); };
+
+  /* ---------------- 账号 ---------------- */
+
+  let loggedIn = null;   // null = 还不知道, "" = 未登录, 否则是玩家名
+  let currentUuid = "";  // 当前账号的 uuid，用来取皮肤头像
+  let pollTimer = 0;
+  let stateHold = 0;
+
+  let offlineName = "Player";
+
+  /* ---- 角色头像：拿皮肤地址，用 CSS 把头部裁出来 ---- */
+  const skinCache = {};
+
+  function paintSkin(el, uuid) {
+    if (!el) return;
+    if (!uuid) {
+      el.classList.remove("skin");
+      el.style.backgroundImage = "";
+      return;
+    }
+    const hit = skinCache[uuid];
+    if (hit) {
+      el.style.backgroundImage = hit;
+      el.classList.add("skin");
+      return;
+    }
+    miy.call("miy.accounts.skin", { uuid }, 12000).then(r => {
+      if (!r || !r.ok || !r.url) return;
+      const url = 'url("' + r.url + '")';
+      skinCache[uuid] = url;
+      el.style.backgroundImage = url;
+      el.classList.add("skin");
+    }).catch(() => { /* 离线时保留首字母头像 */ });
+  }
+
+  async function refreshAccount() {
+    try {
+      const r = await miy.call("miy.accounts.list", {});
+      const cur = r && r.current;
+      loggedIn = cur && cur.name ? cur.name : "";
+      currentUuid = cur && cur.uuid ? cur.uuid : "";
+      renderAccounts((r && r.accounts) || []);
+    } catch (e) {
+      // 网络/宿主一时没响应时保持上一次的状态：不能因为一次失败就把已登录显示成未登录。
+    }
+    try {
+      const o = await miy.call("miy.accounts.offline", {});
+      if (o && o.name) offlineName = o.name;
+    } catch (e) { /* 老宿主没有这个服务时保持默认 */ }
+
+    // 没登录时显示的必须是"真的会用到的那个身份"，不能还写"未登录"。
+    const shown = loggedIn || offlineName;
+    $("#acctName").textContent = loggedIn ? loggedIn : shown;
+    $("#acctSub").textContent = loggedIn ? "点此管理账号" : "离线身份，点此编辑";
+    $("#ava").textContent = shown.slice(0, 1).toUpperCase();
+    $("#ava").classList.toggle("on", !!loggedIn);
+    paintSkin($("#ava"), loggedIn ? (currentUuid || "") : "");
+    $("#offName").value = offlineName;
+    $("#login").hidden = true;
+  }
+
+  async function openOffline() {
+    $("#acctMenu").hidden = true;
+    $("#login").hidden = true;
+    $("#offlineBox").hidden = false;
+    if (!$("#offUuid").value.trim()) {
+      try {
+        const o = await miy.call("miy.accounts.offline", {});
+        if (o && o.uuid) $("#offUuid").value = o.uuid;
+      } catch (e) { /* 忽略 */ }
+    }
+  }
+
+  function stopPolling() {
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = 0; }
+  }
+
+  let failures = 0;
+  let waits = 0;
+  let lastUrl = "";
+
+  async function pollOnce() {
+    let r;
+    try {
+      r = await miy.call("miy.accounts.poll", {});
+      failures = 0;
+    } catch (e) {
+      // 一次网络抖动不该让整条轮询链断掉
+      failures++;
+      if (failures < 6) {
+        $("#loginState").textContent = "网络连接不稳定，正在重试…";
+        pollTimer = setTimeout(pollOnce, 2000);
+      } else {
+        $("#loginState").textContent = "网络似乎不通，请稍后重试。";
+      }
+      return;
+    }
+    const st = (r && r.status) || "";
+    if (st === "pending") {
+      waits++;
+      if (Date.now() > stateHold) {
+        $("#loginState").textContent = "请在浏览器中完成授权。";
+      }
+      if (waits >= 8) {
+        $("#loginTip").textContent = "若浏览器提示成功但此处无响应，请确认该账号已创建 Xbox 档案，或重新打开登录页面再试一次。";
+      }
+      const wait = (r && r.wait_ms) || 2000;
+      pollTimer = setTimeout(pollOnce, Math.max(800, wait));
+      return;
+    }
+    if (st === "ok") {
+      $("#loginState").textContent = "登录成功，欢迎 " + r.name;
+      log("已登录：" + r.name, "on");
+      stopPolling();
+      lastUrl = "";
+      await refreshAccount();
+      return;
+    }
+    if (st === "expired") { $("#loginState").textContent = "验证码已过期，请重新登录。"; return; }
+    if (st === "declined") { $("#loginState").textContent = "已取消这次登录。"; return; }
+    if (st === "error") { $("#loginState").textContent = "登录没有成功，请稍后再试。"; return; }
+    if (st === "idle") { $("#loginState").textContent = "本次登录已结束。"; return; }
+  }
+
+  async function startLogin() {
+    $("#login").hidden = false;
+    $("#code").textContent = "————————";
+    $("#loginTip").textContent = "正在检查登录环境…";
+    $("#loginState").textContent = "";
+    $("#codebox").hidden = false;
+    $("#openlink").hidden = false;
+
+    // 先自检：不开浏览器就能把「应用不存在 / 公共客户端流没开」定位出来。
+    let chk = null;
+    try { chk = await miy.call("miy.accounts.check", {}); } catch (e) { chk = null; }
+    if (chk && chk.ok === false && chk.verdict !== "network") {
+      $("#loginTip").textContent = "暂时不能登录";
+      // 不把 verdict / AADSTS 码甩给玩家：一句能照着做的话就够了
+      $("#loginState").textContent =
+        chk.verdict === "no-client-id"
+          ? "尚未配置 Microsoft 登录信息。"
+          : "登录配置有误，请联系启动器维护者检查应用注册信息。";
+      $("#codebox").hidden = true;
+      $("#openlink").hidden = true;
+      return;
+    }
+
+    $("#loginTip").textContent = "正在准备验证码…";
+    let r;
+    try { r = await miy.call("miy.accounts.start", {}); }
+    catch (e) { r = { ok: false }; }
+    if (!r || !r.ok) {
+      $("#loginTip").textContent = "暂时不能登录";
+      $("#loginState").textContent = "请稍后再试，或先用离线身份游玩。";
+      $("#codebox").hidden = true;
+      $("#openlink").hidden = true;
+      return;
+    }
+    lastUrl = r.verify_uri || "https://www.microsoft.com/link";
+    $("#code").textContent = r.user_code || "????????";
+    $("#loginTip").textContent = "请在 " + lastUrl + " 输入下方代码（" +
+      Math.round((r.expires_in || 900) / 60) + " 分钟内有效）";
+    miy.call("miy.app.open", { url: lastUrl }).catch(() => {});
+    stopPolling();
+    failures = 0;
+    waits = 0;
+    pollTimer = setTimeout(pollOnce, 900);
+
+    // 码一到手就自动进剪贴板：用户下一步就是去浏览器粘贴
+    const copied = await copyCode(true);
+    if (copied) {
+      $("#loginTip").textContent = "请在 " + lastUrl + " 输入下方代码（" +
+        Math.round((r.expires_in || 900) / 60) + " 分钟内有效），代码已自动复制。";
+    }
+    stateHold = Date.now() + 8000;
+    $("#loginState").textContent = copied
+      ? "验证码已复制，去浏览器里粘贴即可"
+      : "也可以手动输入上方代码";
+  }
+
+  // 点账号卡：已登录展开菜单，未登录展开离线档案菜单（里面仍有"登录正版"入口）。
+  $("#acct").onclick = (e) => {
+    e.stopPropagation();
+    $("#acctMenu").hidden = !$("#acctMenu").hidden;
+  };
+
+  $("#editOffline").onclick = (e) => {
+    e.stopPropagation();
+    openOffline();
+  };
+
+  $("#offCancel").onclick = () => {
+    $("#offlineBox").hidden = true;
+    $("#offState").textContent = "名字 3–16 位，只能用字母、数字、下划线。";
+  };
+
+  $("#offSave").onclick = async () => {
+    const name = ($("#offName").value || "").trim();
+    const uuid = ($("#offUuid").value || "").trim();
+    try {
+      const r = await miy.call("miy.accounts.offline.set", { name, uuid }, 8000);
+      if (!r || r.ok === false) {
+        $("#offState").textContent = (r && r.error) || "保存失败。";
+        return;
+      }
+      offlineName = r.name || name;
+      $("#offlineBox").hidden = true;
+      $("#offState").textContent = "已保存。";
+      await refreshAccount();
+      log("离线身份已改为 " + offlineName);
+    } catch (e) {
+      $("#offState").textContent = "保存失败：" + (e.message || e);
+    }
+  };
+
+  $("#loginBtn") && ($("#loginBtn").onclick = () => startLogin());
+
+  $("#signOut").onclick = async (e) => {
+    e.stopPropagation();
+    $("#acctMenu").hidden = true;
+    await miy.call("miy.accounts.logout", {});
+    await refreshAccount();
+    log("已退出登录。");
+  };
+
+  /* 账号列表：点一行就切过去，右侧 × 删除。 */
+  function renderAccounts(list) {
+    const box = $("#acctList");
+    if (!box) return;
+    box.replaceChildren();
+    for (const a of list || []) {
+      const row = document.createElement("div");
+      row.className = "acct-row" + (a.active ? " on" : "");
+      const av = document.createElement("div");
+      av.className = "ava";
+      av.textContent = (a.name || "?").slice(0, 1).toUpperCase();
+      if (a.type === "msa") paintSkin(av, a.uuid);
+      const nm = document.createElement("span");
+      nm.className = "nm";
+      nm.textContent = a.name;
+      const kd = document.createElement("span");
+      kd.className = "kd";
+      kd.textContent = a.type === "msa" ? "正版" : "离线";
+      const rm = document.createElement("button");
+      rm.className = "rm";
+      rm.textContent = "×";
+      rm.title = "删除这个账号";
+      rm.onclick = async (e) => {
+        e.stopPropagation();
+        await miy.call("miy.accounts.remove", { id: a.uuid }).catch(() => {});
+        await refreshAccount();
+      };
+      row.append(av, nm, kd, rm);
+      row.onclick = async (e) => {
+        e.stopPropagation();
+        if (a.active) return;
+        const r = await miy.call("miy.accounts.switch", { id: a.uuid }).catch(() => null);
+        if (r && r.ok === false) {
+          $("#acctSub").textContent = r.error || "切换失败";
+          return;
+        }
+        await refreshAccount();
+      };
+      box.append(row);
+    }
+  }
+
+  document.addEventListener("click", (e) => {
+    if (!$("#acctMenu").hidden && !$("#acctMenu").contains(e.target) && !$("#acct").contains(e.target)) {
+      $("#acctMenu").hidden = true;
+    }
+  });
+
+  /** 把面板上的码放进剪贴板。quiet=true 时不改状态行（调用方自己写）。 */
+  async function copyCode(quiet) {
+    const code = ($("#code").textContent || "").trim();
+    if (!code || code.indexOf("—") >= 0) return false;
+    let ok = false;
+    try {
+      const r = await miy.call("miy.app.clipboard", { text: code });
+      ok = !!(r && r.ok);
+    } catch (e) {
+      ok = false;
+    }
+    if (!quiet) {
+      stateHold = Date.now() + 3000;
+      $("#loginState").textContent = ok ? "已复制：" + code : "复制失败，请手动选中";
+    }
+    return ok;
+  }
+
+  $("#copy").onclick = () => copyCode(false);
+
+  $("#cancel").onclick = () => {
+    stopPolling();
+    miy.call("miy.accounts.cancel", {}).catch(() => {});
+    $("#login").hidden = true;
+    // 取消只是放弃这次新登录，原来的账号必须原样还在。
+    refreshAccount().catch(() => {});
+  };
+
+  $("#openlink").onclick = () => {
+    if (lastUrl) miy.call("miy.app.open", { url: lastUrl }).catch(() => {});
+  };
+
+  let lastCrash = null;
+  function showCrash(p) {
+    lastCrash = p || {};
+    $("#crashReason").textContent = (p && p.reason) || "游戏异常退出。";
+    $("#crashLog").textContent = (p && p.log) || "没有读到游戏日志，可以打开日志文件夹查看。";
+    $("#crash").hidden = false;
+  }
+  $("#crashClose").onclick = () => { $("#crash").hidden = true; };
+  $("#crashOpen").onclick = () => {
+    const dir = lastCrash && lastCrash.dir;
+    if (dir) miy.call("miy.app.open", { path: dir + "\\logs" }).catch(() => {});
+  };
+  $("#crashCopy").onclick = () => {
+    miy.call("miy.app.clipboard", { text: $("#crashLog").textContent || "" }).catch(() => {});
+  };
+
+  miy.onEvent(({ topic, payload }) => {
+    if (topic === "mc.exit") {
+      const code = payload && payload.code;
+      log(code === 0 ? "游戏已退出。" : "游戏意外退出，正在读取崩溃原因…", code === 0 ? "on" : "bad");
+    } else if (topic === "mc.crash") {
+      showCrash(payload);
+      log("游戏崩溃了，原因见弹窗。", "bad");
+    } else if (topic === "accounts.changed") refreshAccount();
+  });
+
+  refreshAccount();
+  boot().catch(() => log("读取版本失败，请稍后重试。", "bad"));
+</script>

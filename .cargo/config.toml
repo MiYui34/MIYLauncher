@@ -1,0 +1,7 @@
+# 静态 CRT：否则干净机器上缺 VCRUNTIME140.dll 直接起不来，
+# "单 exe" 就不成立（docs/architecture.md §13）。
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/OPT:ICF", "-C", "link-arg=/OPT:REF"]
+
+[build]
+incremental = false

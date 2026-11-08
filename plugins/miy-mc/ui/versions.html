@@ -1,0 +1,737 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- miy.mc 的版本页：按分类浏览所有版本，装到「一个版本一个文件夹」的结构里。 -->
+<style>
+  :root{
+    --low:#f3f3fa; --lowest:#fff; --cont:#ededf4; --high:#e7e8ee;
+    --on:#191c20; --on-var:#44474e; --outline:#74777f; --outline-var:#c4c6d0;
+    --primary:#415f91; --on-primary:#fff;
+    --p-cont:#d6e3ff; --on-p-cont:#001b3e;
+    --s-cont:#dae2f9; --on-s-cont:#131c2b;
+    --ok:#146c2e; --ok-cont:#cdebd4; --err:#ba1a1a;
+    --font:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","Noto Sans SC",system-ui,sans-serif;
+    --e1:0 1px 2px rgba(16,24,40,.06);
+    --ease-std:cubic-bezier(.2,0,0,1);
+    --ease-dec:cubic-bezier(.05,.7,.1,1);
+    --d-short:120ms; --d-med:220ms; --d-long:320ms;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%; overflow:hidden}
+  @keyframes rowIn{from{opacity:0; transform:translateY(8px)} to{opacity:1; transform:none}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes shimmer{from{background-position:-320px 0} to{background-position:320px 0}}
+  body{
+    margin:0; background:var(--low); color:var(--on); font:400 14px/20px var(--font);
+    color-scheme:light; -webkit-font-smoothing:antialiased;
+    display:flex; flex-direction:column;
+  }
+  h1{margin:0 0 4px; font:400 22px/28px "Segoe UI Variable Display",var(--font); flex:0 0 auto}
+  .sub{color:var(--on-var); font-size:12px; margin-bottom:18px; flex:0 0 auto}
+
+  .bar{display:flex; gap:10px; align-items:center; margin-bottom:16px; flex-wrap:wrap; flex:0 0 auto}
+  button{
+    background:transparent; color:var(--on); border:1px solid var(--outline-var);
+    border-radius:10px; height:40px; padding:0 18px; font:500 13px var(--font);
+    cursor:pointer; flex:0 0 auto;
+    transition:background var(--d-short) var(--ease-std), box-shadow var(--d-short) var(--ease-std),
+               transform var(--d-short) var(--ease-std);
+  }
+  button:hover:not(:disabled){background:var(--high)}
+  button:active:not(:disabled){transform:scale(.97)}
+  button.primary{background:var(--primary); color:var(--on-primary); border-color:transparent}
+  button.primary:hover:not(:disabled){box-shadow:0 2px 8px rgba(65,95,145,.26); background:var(--primary)}
+  button:disabled{opacity:.45; cursor:default; transform:none}
+
+  .dd{position:relative; z-index:1; flex:0 0 auto}
+  .dd.open{z-index:80}
+  .dd-btn{
+    height:40px; min-width:150px; padding:0 32px 0 12px; border:1px solid var(--outline-var);
+    border-radius:10px; background:#fff; color:var(--on);
+    font:400 13px/20px var(--font); text-align:left; cursor:pointer; position:relative;
+    transition:border-color var(--d-short) var(--ease-std);
+  }
+  .dd-btn:hover{border-color:var(--on-var)}
+  .dd.open .dd-btn{border-color:var(--primary); border-width:2px; padding:0 31px 0 11px}
+  .dd-arrow{
+    position:absolute; right:12px; top:50%; width:8px; height:8px; margin-top:-6px;
+    border-right:1.8px solid var(--on-var); border-bottom:1.8px solid var(--on-var);
+    transform:rotate(45deg); transition:transform var(--d-short) var(--ease-std);
+  }
+  .dd.open .dd-arrow{transform:rotate(-135deg); margin-top:-2px}
+  .dd-menu{
+    position:absolute; top:calc(100% + 6px); left:0; min-width:100%; display:none; z-index:300;
+    background:#fff; border-radius:12px; padding:6px;
+    box-shadow:0 10px 28px rgba(16,24,40,.16), 0 2px 6px rgba(16,24,40,.08);
+    /* 加载器版本动辄几百条：限高 + 自己滚，抽屉不会被撑长。 */
+    max-height:min(300px, 46vh); overflow-y:auto; overscroll-behavior:contain;
+    scrollbar-width:thin;
+  }
+  .dd-menu::-webkit-scrollbar{width:8px}
+  .dd-menu::-webkit-scrollbar-thumb{background:var(--outline); border-radius:4px}
+  .dd-menu::-webkit-scrollbar-track{background:transparent}
+  .dd.open .dd-menu{display:block}
+  /* 下面放不下时翻到按钮上方 */
+  .dd.up .dd-menu{top:auto; bottom:calc(100% + 6px)}
+  .dd-opt{
+    display:flex; width:100%; height:36px; padding:0 12px; border:0; border-radius:8px;
+    background:none; color:var(--on); font:400 13px/20px var(--font);
+    text-align:left; cursor:pointer; white-space:nowrap; align-items:center;
+  }
+  .dd-opt:hover{background:var(--high)}
+  .dd-opt.on{background:var(--s-cont); color:var(--on-s-cont)}
+
+  .list{
+    background:var(--lowest); border-radius:16px; overflow:auto; margin-bottom:14px;
+    box-shadow:var(--e1); flex:1 1 auto; min-height:120px;
+  }
+  .list::-webkit-scrollbar{width:8px}
+  .list::-webkit-scrollbar-thumb{background:var(--outline-var); border-radius:8px}
+  .v{
+    display:flex; align-items:center; gap:12px; padding:11px 18px; min-height:56px;
+    border-bottom:1px solid #eef0f6; animation:rowIn var(--d-long) var(--ease-dec) both;
+  }
+  .v:last-child{border-bottom:0}
+  .v:hover{background:var(--cont)}
+  .v .vt{font-size:13.5px; font-weight:500; min-width:0; overflow:hidden; text-overflow:ellipsis;
+    white-space:nowrap; flex:0 1 auto}
+  .v .vd{color:var(--on-var); font-size:11.5px; white-space:nowrap; flex:0 0 auto}
+  .v .spacer{flex:1 1 auto}
+  .chip{
+    height:20px; padding:0 8px; border-radius:10px; background:var(--cont); color:var(--on-var);
+    font-size:10.5px; line-height:20px; white-space:nowrap; flex:0 0 auto;
+  }
+  .chip.rel{background:var(--p-cont); color:var(--on-p-cont)}
+  .chip.apr{background:#ffe8c7; color:#6a4500}
+  .chip.ok{background:var(--ok-cont); color:var(--ok)}
+  .chip.bad{background:var(--err-cont, #ffdad6); color:var(--err, #ba1a1a)}
+  .v .go{
+    height:30px; padding:0 14px; font-size:12px; border-radius:15px; color:var(--primary);
+    border-color:var(--outline-var); white-space:nowrap; flex:0 0 auto; min-width:64px;
+  }
+  .v .go:hover{background:var(--p-cont); color:var(--on-p-cont); border-color:transparent}
+  .more{display:flex; justify-content:center; padding:12px}
+  .empty{padding:32px 18px; color:var(--on-var); text-align:center; font-size:13px; line-height:22px}
+
+  .sk{padding:12px 18px; display:flex; align-items:center; gap:12px}
+  .sk i, .sk u{
+    display:block; border-radius:8px; height:12px;
+    background:linear-gradient(90deg,#eceef5 25%,#f7f8fc 37%,#eceef5 63%);
+    background-size:640px 100%; animation:shimmer 1.1s linear infinite;
+  }
+  .sk i{width:132px}
+  .sk u{width:78px; opacity:.8}
+  .sk s{flex:1 1 auto}
+  .sk b{width:64px; height:30px; border-radius:15px;
+    background:linear-gradient(90deg,#eceef5 25%,#f7f8fc 37%,#eceef5 63%);
+    background-size:640px 100%; animation:shimmer 1.1s linear infinite}
+
+  .spin{
+    width:14px; height:14px; border-radius:50%; flex:0 0 auto;
+    border:2px solid var(--outline-var); border-top-color:var(--primary);
+    animation:spin .7s linear infinite;
+  }
+  .status{
+    margin:0; flex:0 0 auto; padding:13px 18px; background:var(--lowest); border-radius:14px;
+    box-shadow:var(--e1); font:400 12.5px/18px var(--font); color:var(--on-var);
+    display:flex; align-items:center; gap:10px;
+  }
+  .status::before{content:""; width:7px; height:7px; border-radius:50%; background:var(--outline); flex:0 0 auto}
+  .status.on::before{background:var(--ok)}
+  .status.bad::before{background:var(--err)}
+  .status.bad{color:var(--err)}
+  .status.busy::before{display:none}
+
+  /* 安装面板 */
+  .sheet{
+    position:fixed; inset:auto 0 0 0; z-index:100; background:var(--lowest);
+    border-radius:20px 20px 0 0; padding:20px 22px 22px;
+    box-shadow:0 -12px 40px rgba(16,24,40,.18);
+    transform:translateY(100%); transition:transform var(--d-med) var(--ease-dec);
+    max-height:70%; overflow:auto;
+  }
+  .sheet.open{transform:none}
+  .sheet h3{margin:0 0 4px; font:500 16px/22px "Segoe UI Variable Display",var(--font)}
+  .sheet .hint{margin:0 0 14px; color:var(--on-var); font-size:12px}
+  .field{display:flex; align-items:center; gap:12px; margin-bottom:10px}
+  .field label{width:76px; flex:0 0 auto; color:var(--on-var); font-size:12.5px}
+  .field input{
+    flex:1 1 auto; min-width:0; height:38px; padding:0 12px; background:#fff;
+    border:1px solid var(--outline); border-radius:9px; color:var(--on);
+    font:400 13px/20px var(--font); outline:none;
+  }
+  .field input:focus{border-color:var(--primary); border-width:2px; padding:0 11px}
+  .field .pickrow{display:flex; gap:8px; align-items:center; flex:1 1 auto; min-width:0}
+  .field .pickrow input{flex:1 1 auto; min-width:0}
+  .field .pickrow button{height:36px; padding:0 14px; border-radius:18px; white-space:nowrap; flex:0 0 auto}
+  .sheet .row{display:flex; gap:8px; justify-content:flex-end; margin-top:14px}
+  .bar-wrap{height:6px; border-radius:3px; background:var(--cont); overflow:hidden; margin:12px 0 6px}
+  .bar-fill{height:100%; width:0; background:var(--primary); border-radius:3px;
+    transition:width var(--d-med) var(--ease-std)}
+  .prog{font-size:12px; color:var(--on-var)}
+  .v.mgr{cursor:pointer}
+  .rootchip{font-size:11px; color:var(--on-var); background:var(--cont); border-radius:6px;
+    padding:1px 6px; margin-left:6px; white-space:nowrap}
+  button.danger{background:var(--err); color:#fff; border-color:transparent}
+  button.danger:hover:not(:disabled){box-shadow:0 2px 10px rgba(186,26,26,.28)}
+</style>
+
+<h1>版本</h1>
+<div class="sub" id="sub">每个版本使用独立目录，模组、存档与设置互不影响。</div>
+
+<div class="bar">
+  <div class="dd" id="catdd"></div>
+  <button id="refresh">刷新</button>
+</div>
+
+<div class="list" id="list"></div>
+<p class="status" id="status">选择要安装的版本，默认保存到启动器所在目录的 .minecraft 文件夹。</p>
+
+<div class="sheet" id="sheet">
+  <h3 id="shtitle">安装版本</h3>
+  <p class="hint">版本名决定文件夹名，也是启动器里显示的名字。</p>
+  <div class="field">
+    <label for="shname">版本名</label>
+    <input id="shname" spellcheck="false">
+  </div>
+  <div class="field">
+    <label for="shroot">安装位置</label>
+    <div class="pickrow">
+      <input id="shroot" spellcheck="false" readonly placeholder="默认：启动器所在目录的 .minecraft 文件夹">
+      <button type="button" id="shbrowse">浏览…</button>
+    </div>
+  </div>
+  <div class="field">
+    <label>模组加载器</label>
+    <div class="pickrow">
+      <div class="dd" id="shloader" style="flex:1 1 auto"></div>
+      <div class="dd" id="shlver" style="flex:0 0 150px"></div>
+    </div>
+  </div>
+  <p class="hint" id="shlhint" style="margin:-4px 0 10px">装模组需要加载器；不装模组可以选「不安装」。</p>
+  <div class="bar-wrap"><div class="bar-fill" id="shbar"></div></div>
+  <div class="prog" id="shprog"></div>
+  <div class="row">
+    <button id="shclose" class="quiet" style="margin-right:auto">关闭</button>
+    <button id="shstop" hidden>取消安装</button>
+    <button id="shcancel" hidden>转到后台</button>
+    <button class="primary" id="shgo">开始安装</button>
+  </div>
+</div>
+
+
+<script>
+  const $ = s => document.querySelector(s);
+  const log = (s, kind) => {
+    const p = $("#status");
+    p.replaceChildren();
+    if (kind === "busy") p.append(Object.assign(document.createElement("i"), { className: "spin" }));
+    p.append(document.createTextNode(s));
+    p.className = "status" + (kind ? " " + kind : "");
+  };
+
+  // 下拉菜单挂到 body 上、用 fixed 定位：安装抽屉（.sheet）带 overflow:auto，
+  // 菜单留在里面会被抽屉边界裁掉。挂出去之后只受窗口边界约束。
+  let openDD = null;
+  function closeDD() {
+    if (!openDD) return;
+    openDD.menu.style.display = "none";
+    openDD.el.classList.remove("open");
+    openDD = null;
+  }
+  function placeDD(el, btn, menu) {
+    const b = btn.getBoundingClientRect();
+    const gap = 6, edge = 8;
+    menu.style.position = "fixed";
+    menu.style.left = Math.max(edge, Math.min(b.left, window.innerWidth - edge - 120)) + "px";
+    menu.style.minWidth = b.width + "px";
+    menu.style.maxHeight = "";
+    menu.style.top = "0px";
+    menu.style.bottom = "auto";
+    const h = menu.offsetHeight;
+    const below = window.innerHeight - b.bottom - gap - edge;
+    const above = b.top - gap - edge;
+    if (h <= below || below >= above) {
+      menu.style.top = b.bottom + gap + "px";
+      if (h > below) menu.style.maxHeight = Math.max(96, below) + "px";
+    } else {
+      menu.style.top = "auto";
+      menu.style.bottom = window.innerHeight - b.top + gap + "px";
+      if (h > above) menu.style.maxHeight = Math.max(96, above) + "px";
+    }
+  }
+  function dd(el, items, cur, onPick) {
+    el.replaceChildren();
+    el.classList.remove("open");
+    // 同一个位置会被反复重建（切加载器就重填版本列表），旧菜单要一起收走。
+    if (el.__ddMenu) { el.__ddMenu.remove(); el.__ddMenu = null; }
+    if (openDD && openDD.el === el) closeDD();
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "dd-btn";
+    const txt = document.createElement("span");
+    const first = items.find(i => i.value === cur) || items[0];
+    txt.textContent = first ? first.label : "";
+    const arrow = document.createElement("i");
+    arrow.className = "dd-arrow";
+    btn.append(txt, arrow);
+    const menu = document.createElement("div");
+    menu.className = "dd-menu";
+    menu.style.display = "none";
+    for (const it of items) {
+      const o = document.createElement("button");
+      o.type = "button";
+      o.className = "dd-opt" + (it.value === cur ? " on" : "");
+      o.textContent = it.label;
+      o.onclick = (e) => {
+        e.stopPropagation();
+        txt.textContent = it.label;
+        for (const c of menu.children) c.classList.toggle("on", c === o);
+        closeDD();
+        onPick(it.value);
+      };
+      menu.append(o);
+    }
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      if (openDD && openDD.el === el) { closeDD(); return; }
+      closeDD();
+      el.classList.add("open");
+      menu.style.display = "block";
+      placeDD(el, btn, menu);
+      openDD = { el, menu };
+    };
+    el.append(btn);
+    el.__ddMenu = menu;
+    document.body.append(menu);
+  }
+  document.addEventListener("click", closeDD);
+  document.addEventListener("scroll", (e) => {
+    if (openDD && !openDD.menu.contains(e.target)) closeDD();
+  }, true);
+  window.addEventListener("resize", closeDD);
+
+  const CATS = [
+    { value: "latest", label: "最新版本" },
+    { value: "release", label: "正式版" },
+    { value: "snapshot", label: "预览版" },
+    { value: "old", label: "远古版" },
+    { value: "april", label: "愚人节版" },
+  ];
+  let cat = "latest";
+  dd($("#catdd"), CATS, cat, v => { cat = v; render(); });
+
+  const PAGE = 200;          // 一次渲染多少行，多了给"显示更多"
+  let all = [];              // 清单里全部版本
+  let shown = PAGE;
+  let installedInfo = {};
+  let installed = new Set(); // 已安装且能用的目录名
+  let brokenSet = new Set();   // 装坏了/带 .incomplete 标记的目录名
+  let root = "";
+
+  const TYPELABEL = { release: "正式版", snapshot: "快照", old_beta: "远古 Beta", old_alpha: "远古 Alpha" };
+
+  function skeleton(n) {
+    const rows = [];
+    for (let i = 0; i < n; i++) {
+      const r = document.createElement("div");
+      r.className = "sk";
+      const a = document.createElement("i");
+      const b = document.createElement("u");
+      const s = document.createElement("s");
+      const g = document.createElement("b");
+      r.append(a, b, s, g);
+      rows.push(r);
+    }
+    $("#list").replaceChildren(...rows);
+  }
+
+  function pick() {
+    if (cat === "latest") return all.slice(0, 6);
+    if (cat === "release") return all.filter(v => v.type === "release");
+    if (cat === "snapshot") return all.filter(v => v.type === "snapshot" && !v.april);
+    if (cat === "old") return all.filter(v => v.type === "old_beta" || v.type === "old_alpha");
+    if (cat === "april") return all.filter(v => v.april);
+    return all;
+  }
+
+  function row(v) {
+    const r = document.createElement("div");
+    r.className = "v";
+
+    const t = document.createElement("div");
+    t.className = "vt";
+    t.textContent = v.id;
+    r.append(t);
+
+    const chip = document.createElement("span");
+    chip.className = "chip" + (v.type === "release" ? " rel" : v.april ? " apr" : "");
+    chip.textContent = v.april ? "愚人节" : (TYPELABEL[v.type] || v.type || "");
+    r.append(chip);
+
+    const d = document.createElement("div");
+    d.className = "vd";
+    d.textContent = (v.releaseTime || "").slice(0, 10);
+    r.append(d);
+
+    r.append(Object.assign(document.createElement("div"), { className: "spacer" }));
+
+    if (installed.has(v.id)) {
+      const ok = document.createElement("span");
+      ok.className = "chip ok";
+      ok.textContent = "已安装";
+      r.append(ok);
+      // 装在别的 .minecraft 里时标一下目录名，免得以为装丢了。
+      const info = installedInfo[v.id];
+      if (info && info.rootName && info.root && info.root !== root) {
+        const rc = document.createElement("span");
+        rc.className = "rootchip";
+        rc.textContent = info.rootName;
+        rc.title = info.root;
+        r.append(rc);
+      }
+    } else if (brokenSet.has(v.id)) {
+      const bad = document.createElement("span");
+      bad.className = "chip bad";
+      bad.textContent = "需重装";
+      bad.title = "上次安装没有完成，重新安装会补齐缺少的文件。";
+      r.append(bad);
+    }
+
+    const go = document.createElement("button");
+    go.className = "go";
+    go.textContent = "安装";
+    if (busy) {
+      go.disabled = true;
+      go.title = "正在安装其他版本，请等它结束或先取消。";
+    }
+    go.onclick = () => openSheet(v);
+    // 点整行：装过的跳到详情页（改名/位置/删除/启动），没装过的打开安装面板。
+    r.classList.add("mgr");
+    r.onclick = e => {
+      if (e.target.closest("button")) return;
+      if (installed.has(v.id) || brokenSet.has(v.id)) {
+        miy.goto("page:miy.mc/detail?name=" + encodeURIComponent(v.id));
+      } else {
+        openSheet(v);
+      }
+    };
+    r.append(go);
+    return r;
+  }
+
+  function render() {
+    const box = $("#list");
+    let list = pick();
+    if (!list.length) {
+      box.replaceChildren(Object.assign(document.createElement("div"),
+        { className: "empty", textContent: "该分类下暂无版本。" }));
+      return;
+    }
+    const part = list.slice(0, shown);
+    const rows = part.map(row);
+    rows.forEach((r, i) => { r.style.animationDelay = Math.min(i, 12) * 12 + "ms"; });
+    box.replaceChildren(...rows);
+    if (list.length > shown) {
+      const more = document.createElement("div");
+      more.className = "more";
+      const b = document.createElement("button");
+      b.textContent = "显示更多（还有 " + (list.length - shown) + " 个）";
+      b.onclick = () => { shown += PAGE; render(); };
+      more.append(b);
+      box.append(more);
+    }
+  }
+
+  async function load() {
+    skeleton(8);
+    log("正在读取版本列表…", "busy");
+    try {
+      const r = await miy.call("miy.mc.versions", {}, 60000);
+      all = (r && r.versions) || [];
+      if (!all.length) {
+        $("#list").replaceChildren(Object.assign(document.createElement("div"),
+          { className: "empty", textContent: "未能获取版本列表，请检查网络后刷新。" }));
+        log("版本列表为空。", "bad");
+        return;
+      }
+      installed = new Set([...installed]);
+      shown = PAGE;
+      render();
+      log("共 " + all.length + " 个版本。", "on");
+    } catch (e) {
+      $("#list").replaceChildren(Object.assign(document.createElement("div"),
+        { className: "empty", textContent: "未能获取版本列表。" }));
+      log("读取失败，请检查网络后重试。", "bad");
+    }
+  }
+
+  async function loadInstalled() {
+    try {
+      const r = await miy.call("miy.mc.installed", {}, 15000);
+    if (r && r.versions) {
+      brokenSet = new Set(r.versions.filter(v => v.ok === false).map(v => v.id));
+    }
+      const list = (r && r.versions) || [];
+      installed = new Set(list.filter(v => v.ok !== false).map(v => v.id));
+      installedInfo = {};
+      list.forEach(v => { installedInfo[v.id] = v; });
+      if (r && r.root) root = r.root;
+    } catch (e) { /* 没装过就是空的 */ }
+  }
+
+  /* ---- 安装面板 ---- */
+  let target = null;
+  let busy = false;
+
+  let loaderPick = "";
+  let loaderVer = "";
+  let loaderList = [];
+
+  async function setupLoader(v) {
+    loaderPick = "";
+    loaderVer = "";
+    loaderList = [];
+    dd($("#shloader"), [{ value: "", label: "不安装" }], "", id => { loaderPick = id; fillLoaderVer(); });
+    dd($("#shlver"), [{ value: "", label: "—" }], "", id => { loaderVer = id; });
+    $("#shlhint").textContent = "正在读取加载器列表…";
+    try {
+      const r = await miy.call("miy.mc.loaders", { mc: v.id }, 45000);
+      loaderList = (r && r.loaders) || [];
+    } catch (e) {
+      loaderList = [];
+    }
+    const items = [{ value: "", label: "不安装" }]
+      .concat(loaderList.map(l => ({ value: l.id, label: l.name })));
+    dd($("#shloader"), items, "", id => { loaderPick = id; fillLoaderVer(); });
+    $("#shlhint").textContent = loaderList.length
+      ? "装模组需要加载器；不装模组可以选「不安装」。"
+      : "这个版本暂时取不到加载器列表，可以先装原版。";
+  }
+
+  // 版本名跟着加载器变：`26.1.2` → `26.1.2-fabric`。
+  // 用户自己改过名字（已经不等于版本号）就不再动它。
+  function syncName() {
+    if (!target) return;
+    const cur = ($("#shname").value || "").trim();
+    if (cur && cur !== target.id) return;
+    $("#shname").value = (loaderPick && loaderVer) ? target.id + "-" + loaderPick : target.id;
+  }
+
+  function fillLoaderVer() {
+    const l = loaderList.find(x => x.id === loaderPick);
+    if (!l) {
+      loaderVer = "";
+      dd($("#shlver"), [{ value: "", label: "—" }], "", () => {});
+      syncName();
+      return;
+    }
+    const vs = (l.versions || []).slice(0, 40).map(x => ({
+      value: x.version,
+      label: x.version + (x.stable ? "" : "（测试）"),
+    }));
+    loaderVer = vs.length ? vs[0].value : "";
+    dd($("#shlver"), vs.length ? vs : [{ value: "", label: "—" }], loaderVer, id => { loaderVer = id; syncName(); });
+    syncName();
+  }
+
+  function openSheet(v) {
+    closeDD();
+    target = v;
+    $("#shtitle").textContent = "安装 " + v.id;
+    $("#shname").value = v.id;
+    $("#shroot").value = root || "";
+    setupLoader(v);
+    $("#shbar").style.width = "0";
+    $("#shprog").textContent = "";
+    $("#shgo").disabled = false;
+    $("#shgo").textContent = "开始安装";
+    // 取消和「转到后台」只在安装过程中才有意义，平时不该出现。
+    $("#shstop").hidden = true;
+    $("#shstop").disabled = false;
+    $("#shstop").textContent = "取消安装";
+    $("#shcancel").hidden = true;
+    $("#shclose").hidden = false;
+    // 已经有一个安装在上传/下载时，不让面板假装能再开一个。
+    if (busy) {
+      $("#shgo").disabled = true;
+      $("#shgo").textContent = "正在安装";
+      $("#shprog").textContent = "正在安装，可点右下角查看进度。";
+      $("#shcancel").hidden = false;
+      $("#shstop").hidden = false;
+      $("#shclose").hidden = true;
+    }
+    $("#sheet").classList.add("open");
+    $("#shname").focus();
+    $("#shname").select();
+  }
+
+  function closeSheet() {
+    // 下载跑在插件自己的任务表里，关掉面板不影响它；进度去右下角看。
+    closeDD();
+    $("#sheet").classList.remove("open");
+  }
+
+  async function doInstall() {
+    if (busy || !target) return;
+    // 版本名默认跟着加载器走：装着 Fabric 就叫 `26.1.2-fabric`。
+    // 输入框里的默认值就是版本号本身，那不算用户自定义的名字 ——
+    // 否则装加载器会写进原版同名目录，版本页里又变回"两条分不清"。
+    const typed = ($("#shname").value || "").trim();
+    const withLoader = Boolean(loaderPick && loaderVer);
+    const custom = typed && typed !== target.id;
+    const name = custom ? typed : (withLoader ? target.id + "-" + loaderPick : target.id);
+    const where = ($("#shroot").value || "").trim();
+    busy = true;
+    $("#shgo").disabled = true;
+    $("#shgo").textContent = "安装中…";
+    $("#shstop").hidden = false;
+    $("#shstop").disabled = false;
+    $("#shstop").textContent = "取消安装";
+    $("#shcancel").hidden = false;
+    $("#shclose").hidden = true;
+    lastTick = 0;
+    lastBytes = 0;
+    $("#shbar").style.width = "2%";
+    $("#shprog").textContent = "正在解析版本…";
+    log("正在安装 " + name + "（约 160 MB，公共资源会自动复用）。可以切换到其他页面，右下角会显示进度。", "busy");
+
+    try {
+      const req = { id: target.id, name };
+      if (where) req.root = where;
+      // 加载器跟本体一起装：插件会把加载器的 profile 合进原版，
+      // 客户端、运行库、Fabric API 全部落进同一个版本目录。
+      if (withLoader) {
+        req.loader = loaderPick;
+        req.loaderVersion = loaderVer;
+      }
+      const r = await miy.call("miy.mc.install", req, 3600000);
+      if (r && r.ok) {
+        let loaderNote = "";
+        if (withLoader) {
+          loaderNote = "，已装上 " + loaderPick + " " + loaderVer;
+          if (r.fabricApi) loaderNote += "，并放入了 Fabric API";
+          else if (r.fabricApiError) loaderNote += "（Fabric API 没装上：" + r.fabricApiError + "）";
+        }
+        await loadInstalled();
+        render();
+        $("#shbar").style.width = "100%";
+        $("#shprog").textContent = "已完成，" + Math.round((r.bytes || 0) / 1048576) + " MB，"
+          + (r.files || 0) + " 个文件" + loaderNote;
+        log(name + " 已安装完成" + loaderNote + "，可在首页启动。", "on");
+        busy = false;
+        $("#shgo").textContent = "完成";
+        $("#shstop").hidden = true;
+        $("#shcancel").hidden = true;
+        $("#shclose").hidden = false;
+        $("#sheet").classList.remove("open");
+        return;
+      }
+      if (r && r.cancelled) {
+        // 取消是"撤销这次安装"：插件里已经把这次下的文件清干净了。
+        log("已取消安装，这次下载的文件已清理。", "");
+        $("#shprog").textContent = "已取消，本次下载的文件已清理";
+        await loadInstalled();
+        render();
+        busy = false;
+        $("#shgo").disabled = false;
+        $("#shgo").textContent = "重新安装";
+        $("#shstop").hidden = true;
+        $("#shcancel").hidden = true;
+        $("#shclose").hidden = false;
+        return;
+      }
+      log((r && r.error) || "安装没有完成。", "bad");
+      $("#shprog").textContent = (r && r.error) || "安装未完成";
+    } catch (e) {
+      log("安装未完成，请检查网络或更换安装位置后重试。", "bad");
+      $("#shprog").textContent = "安装未完成";
+    }
+    busy = false;
+    $("#shgo").disabled = false;
+    $("#shgo").textContent = "重试";
+    $("#shstop").hidden = true;
+    $("#shcancel").hidden = true;
+    $("#shclose").hidden = false;
+  }
+
+  // 事件回调收到的是一个 {topic, payload} 对象；以前这里写成两个形参，
+  // 于是 topic 拿到整个对象、payload 永远是 undefined —— 进度条一动不动。
+  //
+  // 速度用 2.5 秒滑动窗口算，而不是「两次事件之间」：事件间隔只有 250ms，
+  // 抖动极大；而且卡住时根本没有事件，旧写法会把上一次的速度一直挂在界面上。
+  let samples = [];          // [{t, bytes}]
+  let lastDone = 0, lastTotal = 1, lastBytes = 0;
+  function speedNow() {
+    const now = Date.now();
+    while (samples.length > 1 && now - samples[0].t > 2500) samples.shift();
+    if (samples.length < 2) return 0;
+    const a = samples[0], b = samples[samples.length - 1];
+    const dt = (b.t - a.t) / 1000;
+    if (dt <= 0.2) return 0;
+    return Math.max(0, (b.bytes - a.bytes) / 1048576 / dt);
+  }
+  function paintProgress() {
+    const p1 = Math.min(99, Math.round(lastDone / Math.max(1, lastTotal) * 100));
+    const mbs = speedNow();
+    const speed = mbs > 0.05 ? "，" + mbs.toFixed(1) + " MB/s" : "，0.0 MB/s";
+    $("#shbar").style.width = p1 + "%";
+    $("#shprog").textContent = p1 + "%，文件 " + lastDone + " / " + lastTotal + "，"
+      + (lastBytes / 1048576).toFixed(1) + " MB" + speed;
+  }
+  // 没有新事件时也要刷新：卡住的时候速度得自己掉到 0，而不是停在旧值上。
+  setInterval(() => { if (busy) paintProgress(); }, 500);
+  miy.onEvent(({ topic, payload }) => {
+    // 后台把版本清单换成新的了：悄悄重画列表，用户不用手动刷新。
+    if (topic === "mc.versions.updated") {
+      if (!busy) load();
+      return;
+    }
+    if (topic !== "mc.progress" || !busy || !payload) return;
+    lastDone = payload.done || 0;
+    lastTotal = payload.total || 1;
+    lastBytes = payload.bytes || 0;
+    samples.push({ t: Date.now(), bytes: lastBytes });
+    if (samples.length > 40) samples.shift();
+    paintProgress();
+  });
+
+  async function stopInstall() {
+    $("#shstop").disabled = true;
+    $("#shstop").textContent = "正在取消…";
+    try {
+      const r = await miy.call("miy.mc.tasks", {}, 5000);
+      const live = (r && r.tasks || []).filter(t => t.state === "running" && t.kind === "install");
+      if (!live.length) { $("#shprog").textContent = "当前没有正在进行的安装任务。"; return; }
+      await miy.call("miy.mc.task.cancel", { id: live[live.length - 1].id }, 5000);
+      $("#shprog").textContent = "正在取消，本次下载的文件会被清理。";
+      $("#shcancel").hidden = true;
+    } catch (e) {
+      $("#shprog").textContent = "取消失败，请稍后重试。";
+      $("#shstop").disabled = false;
+      $("#shstop").textContent = "取消安装";
+    }
+  }
+
+  $("#shgo").onclick = doInstall;
+  $("#shclose").onclick = closeSheet;
+  $("#shcancel").onclick = closeSheet;
+  $("#shstop").onclick = stopInstall;
+  $("#shbrowse").onclick = async () => {
+    const btn = $("#shbrowse");
+    btn.disabled = true;
+    try {
+      const r = await miy.call("miy.app.pickFolder", { title: "选择游戏安装位置" }, 600000);
+      if (r && r.ok && r.path) {
+        $("#shroot").value = r.path;
+        log("安装位置：" + r.path, "on");
+      }
+    } catch (e) { /* 用户取消对话框不算错误 */ }
+    btn.disabled = false;
+  };
+  $("#refresh").onclick = () => { loadInstalled().then(load); };
+
+  (async () => {
+    await loadInstalled();
+    await load();
+  })().catch(() => {});
+</script>

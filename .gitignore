@@ -1,0 +1,43 @@
+# ---- 构建产物 ----
+/target/
+/dist/
+
+# ---- 反编译的第三方源码（不属于本项目，也不应再分发）----
+/pcl2-src/
+/docs/pcl2/
+
+# ---- 私有后端与运维（服务器源码、凭据、发布脚本）----
+/server/
+/scripts/ssh-run.py
+/scripts/cdn.py
+/scripts/publish-cdn.py
+/scripts/publish-from-mirror.py
+/scripts/publish-assets.sh
+/scripts/cleanup-cdn.py
+/scripts/probe-asset.py
+/scripts/scan-routes.py
+/scripts/stub-presign.py
+/scripts/deploy-cfkey.sh
+/scripts/shot_admin.py
+/scripts/shot_admin_live.py
+/scripts/test_admin.py
+/scripts/extract-crash-rules.py
+
+# ---- 内部文档（含服务器地址、桶与隧道信息）----
+/docs/backend-requirements.md
+/docs/cdn-presign.md
+
+# ---- 素材与截图 ----
+/shots/
+/design/
+
+# ---- 杂项 ----
+/_p_roots.py
+__pycache__/
+*.pyc
+*.log
+*.bak
+*.tmp
+*.ranges
+.env
+.env.*

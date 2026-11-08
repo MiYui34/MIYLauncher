@@ -1,0 +1,16 @@
+[package]
+name = "miy-mc"
+description = "Minecraft 版本解析与下载（第一个真实插件）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+# cdylib：老样子，开发时能单独装进 plugins\ 当外置插件跑；
+# rlib：宿主把它静态链进 exe，用户只下一个 MIYLauncher.exe 就能启动游戏。
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+miy-abi = { workspace = true }
+serde_json = "1"
+flate2 = { workspace = true }

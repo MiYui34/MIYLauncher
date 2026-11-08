@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- 小尺寸专用母版（只用于 16px / 24px）。
+       同一版式，但笔更细、谷更浅、留白更多 —— 16px 下笔画不易糊成一块。 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4C6BA2"/>
+      <stop offset="1" stop-color="#37517F"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="48" y="48" width="928" height="928" rx="218" fill="url(#bg)"/>
+
+  <!-- 竖笔 136，斜笔水平 164（垂直厚度约 136），谷底 496，内凹 660 -->
+  <path fill="#F4F7FF"
+        d="M186 848 L186 186 L322 186 L512 496 L702 186 L838 186 L838 848
+           L702 848 L702 350 L512 660 L322 350 L322 848 Z"/>
+</svg>

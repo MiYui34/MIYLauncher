@@ -1,0 +1,11 @@
+{
+  "id": "miy.boom",
+  "name": "Boom",
+  "version": "0.1.0",
+  "description": "故意崩溃的插件：验证 panic 与访问冲突都被挡在边界上",
+  "abi": 1,
+  "entry": "miy_boom.dll",
+  "priority": -100,
+  "eager": true,
+  "contributes": {}
+}

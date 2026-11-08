@@ -1,0 +1,663 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- miy.mc 的第二个页面：版本管理。同样是一个文件说了算。 -->
+<style>
+  :root{
+    --surface:#f9f9ff; --low:#f3f3fa; --lowest:#fff; --cont:#ededf4; --high:#e7e8ee;
+    --on:#191c20; --on-var:#44474e; --outline:#74777f; --outline-var:#c4c6d0;
+    --primary:#415f91; --on-primary:#fff;
+    --p-cont:#d6e3ff; --on-p-cont:#001b3e;
+    --s-cont:#dae2f9; --on-s-cont:#131c2b;
+    --ok:#146c2e; --err:#ba1a1a;
+    --font:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","Noto Sans SC",system-ui,sans-serif;
+    --e1:0 1px 2px rgba(16,24,40,.06);
+    --ease-std:cubic-bezier(.2,0,0,1);
+    --ease-dec:cubic-bezier(.05,.7,.1,1);
+    --d-short:120ms; --d-med:220ms; --d-long:320ms;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%; overflow:hidden}
+  @keyframes rowIn{from{opacity:0; transform:translateY(8px)} to{opacity:1; transform:none}}
+  @keyframes fadeIn{from{opacity:0} to{opacity:1}}
+  body{
+    margin:0; background:var(--low); color:var(--on); font:400 14px/20px var(--font);
+    color-scheme:light; -webkit-font-smoothing:antialiased;
+    display:flex; flex-direction:column;
+  }
+  /* 标题、说明、工具条都不参与压缩：版本列表再长，也只让列表自己滚动。
+     不给 flex:0 0 auto 的话，列表一长，flex 会把这几行按比例压扁（说明行
+     带 overflow:hidden，最小高度是 0，会被压到看不见）。 */
+  h1{margin:0 0 4px; font:400 22px/28px "Segoe UI Variable Display",var(--font); flex:0 0 auto}
+  .sub{
+    color:var(--on-var); font-size:12px; margin-bottom:18px; overflow:hidden;
+    text-overflow:ellipsis; white-space:nowrap; flex:0 0 auto;
+  }
+  .bar{display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:16px; flex:0 0 auto}
+  button{
+    background:transparent; color:var(--on); border:1px solid var(--outline-var);
+    border-radius:10px; height:40px; padding:0 18px; font:500 13px var(--font);
+    cursor:pointer;
+    transition:background var(--d-short) var(--ease-std), border-color var(--d-short) var(--ease-std),
+               box-shadow var(--d-short) var(--ease-std), transform var(--d-short) var(--ease-std);
+  }
+  button:hover:not(:disabled){background:var(--high)}
+  button:active:not(:disabled){transform:scale(.97)}
+  button.primary{
+    background:var(--primary); color:var(--on-primary); border-color:transparent;
+  }
+  button.primary:hover:not(:disabled){box-shadow:0 2px 8px rgba(65,95,145,.26); background:var(--primary)}
+  button:disabled{opacity:.45; cursor:default; transform:none}
+  /* 三级按钮：偶尔才点的操作不该抢注意力 */
+  button.quiet{
+    border-color:transparent; background:none; color:var(--on-var);
+    height:32px; padding:0 10px; font-size:12.5px;
+  }
+  button.quiet:hover{background:var(--high); color:var(--on)}
+  button.quiet + button.quiet{margin-left:0}
+
+  .cols{display:flex; gap:16px; align-items:stretch; min-height:0; flex:1 1 auto; margin-bottom:14px}
+  .cols .list{flex:1 1 auto; min-width:0; margin-bottom:0}
+  .side{
+    flex:0 0 208px; align-self:flex-start; display:flex; flex-direction:column; gap:10px;
+    padding:12px; background:var(--lowest); border:1px solid var(--outline-var);
+    border-radius:14px; position:sticky; top:0; box-shadow:var(--e1);
+    max-height:100%; overflow:auto;
+  }
+  .side-h{font:500 12px/16px var(--font); color:var(--on-var); letter-spacing:.02em}
+  .roots{display:flex; flex-direction:column; gap:2px; max-height:320px; overflow:auto;
+    scrollbar-width:none}
+  .roots::-webkit-scrollbar{width:0}
+  .root-row{
+    display:flex; align-items:center; gap:6px; padding:7px 6px 7px 8px; border-radius:8px;
+    cursor:pointer; font-size:12.5px; color:var(--on); border:none; background:none;
+    text-align:left; width:100%;
+  }
+  .root-row:hover{background:var(--low)}
+  .root-row.on{background:var(--p-cont); color:var(--on-p-cont)}
+  .root-row .nm{flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;
+    white-space:nowrap}
+  .root-row .ct{flex:0 0 auto; font-size:11px; color:var(--on-var)}
+  .root-row.on .ct{color:inherit; opacity:.75}
+  .root-row .more{
+    flex:0 0 auto; width:22px; height:22px; padding:0; border:none; background:none;
+    border-radius:6px; color:var(--on-var); font-size:14px; line-height:22px;
+    opacity:0; transition:opacity var(--d-short) var(--ease-std);
+  }
+  .root-row:hover .more, .root-row.on .more{opacity:1}
+  .root-row .more:hover{background:rgba(0,0,0,.06)}
+  .side-b{display:flex; flex-direction:column; gap:6px; padding-top:8px;
+    border-top:1px solid var(--outline-var)}
+  .side-b button{height:32px; font-size:12.5px; padding:0 10px; justify-content:center}
+
+  /* 行内「⋯」弹出的小菜单 */
+  .menu{
+    position:fixed; z-index:40; min-width:132px; padding:6px; background:var(--lowest);
+    border:1px solid var(--outline-var); border-radius:10px;
+    box-shadow:0 8px 24px rgba(16,24,40,.14); display:none;
+  }
+  .menu.on{display:block; animation:fadeIn var(--d-short) var(--ease-std)}
+  .menu button{
+    display:block; width:100%; height:32px; padding:0 10px; border:none; background:none;
+    border-radius:7px; text-align:left; font:400 12.5px var(--font); color:var(--on);
+  }
+  .menu button:hover{background:var(--low)}
+  .menu button.danger{color:var(--err)}
+  .menu button.danger:hover{background:#ffdad6}
+
+  /* 弹窗：改名 / 确认删除 */
+  .mask{
+    position:fixed; inset:0; background:rgba(16,24,40,.32); display:none;
+    align-items:center; justify-content:center; z-index:50;
+  }
+  .mask.on{display:flex; animation:fadeIn var(--d-short) var(--ease-std)}
+  .dialog{
+    width:min(420px, 86vw); background:var(--lowest); border-radius:16px; padding:20px;
+    box-shadow:0 18px 48px rgba(16,24,40,.22);
+  }
+  .dialog h3{margin:0 0 8px; font:500 16px/22px var(--font)}
+  .dialog p{margin:0 0 14px; color:var(--on-var); font-size:13px; line-height:19px}
+  .dialog input{
+    width:100%; height:38px; padding:0 12px; border:1px solid var(--outline-var);
+    border-radius:10px; font:400 13px var(--font); color:var(--on); background:var(--lowest);
+    outline:none;
+  }
+  .dialog input:focus{border-color:var(--primary); box-shadow:0 0 0 3px rgba(65,95,145,.14)}
+  .dacts{display:flex; justify-content:flex-end; gap:8px; margin-top:16px}
+  .dacts button{height:36px; padding:0 16px; font-size:13px}
+  .dacts button.danger{background:var(--err); color:#fff; border-color:transparent}
+
+  .list{
+    background:var(--lowest); border-radius:16px; overflow:auto; margin-bottom:16px;
+    box-shadow:var(--e1); flex:1 1 auto; min-height:120px;
+    animation:fadeIn var(--d-med) var(--ease-std) both;
+  }
+  .list::-webkit-scrollbar{width:8px}
+  .list::-webkit-scrollbar-thumb{background:var(--outline-var); border-radius:8px}
+  .v{
+    display:flex; align-items:center; gap:14px; padding:12px 18px; min-height:56px;
+    border-bottom:1px solid #eef0f6; transition:background-color var(--d-short) var(--ease-std);
+    animation:rowIn var(--d-long) var(--ease-dec) both;
+  }
+  .v:last-child{border-bottom:0}
+  .v:hover{background:var(--cont)}
+  .v .left{display:flex; flex-direction:column; gap:4px; min-width:0}
+  .v .id{font-weight:500; font-size:14px}
+  .v .meta{display:flex; align-items:center; gap:6px; flex-wrap:wrap}
+  .v .chipmini{
+    font-size:11px; line-height:16px; color:var(--on-var); background:var(--cont);
+    border-radius:6px; padding:1px 7px; white-space:nowrap;
+  }
+  .v .chipmini.hl{background:var(--s-cont); color:var(--on-s-cont)}
+  .v .chipmini.warn{background:#ffdad6; color:#8c1d18}
+  .v .flex{flex:1}
+  .v .size{color:var(--on-var); font-size:12px}
+  .v .go{
+    background:transparent; color:var(--primary); border:1px solid var(--outline-var);
+    height:32px; padding:0 16px; font-size:12.5px; border-radius:16px;
+  }
+  .v .go:hover{background:var(--p-cont); color:var(--on-p-cont); border-color:transparent}
+  .empty{padding:28px 18px; color:var(--on-var); text-align:center; font-size:13px}
+
+  .status{
+    margin:0; flex:0 0 auto; padding:14px 18px; background:var(--lowest); border-radius:14px;
+    box-shadow:var(--e1); font:400 12.5px/18px var(--font); color:var(--on-var);
+    display:flex; align-items:center; gap:10px;
+  }
+  .status::before{
+    content:""; width:7px; height:7px; border-radius:50%; background:var(--outline);
+    flex:0 0 auto;
+  }
+  .status.on::before{background:var(--ok)}
+  /* 启动中浮出来的「取消启动」：启动要读清单、补资源、挑 Java，慢的时候十几秒 */
+  .cancel-launch{
+    position:fixed; right:22px; bottom:22px; height:42px; padding:0 18px; border-radius:21px;
+    background:var(--lowest); color:var(--on); border:1px solid var(--outline-var);
+    font:500 13px var(--font); box-shadow:0 6px 20px rgba(16,24,40,.16); cursor:pointer;
+    z-index:90;
+  }
+  .cancel-launch:hover:not(:disabled){background:var(--high)}
+  .cancel-launch:disabled{opacity:.6; cursor:default}
+  .cancel-launch[hidden]{display:none}
+  .status.bad::before{background:var(--err)}
+  .status.bad{color:var(--err)}
+  .v.mgr{cursor:pointer}
+
+  /* 崩溃窗口 */
+  .crash{
+    position:fixed; inset:0; z-index:200; display:flex; align-items:center; justify-content:center;
+    background:rgba(16,24,40,.42); padding:24px;
+  }
+  /* display:flex 会盖掉浏览器默认的 [hidden]{display:none}，必须显式关掉 */
+  .crash[hidden]{display:none}
+  .crash-box{
+    width:min(720px, 100%); max-height:100%; display:flex; flex-direction:column; gap:10px;
+    background:#fff; border-radius:16px; padding:20px;
+    box-shadow:0 24px 60px rgba(16,24,40,.28);
+  }
+  .crash-box h3{margin:0; font:500 16px/24px var(--font); color:var(--on)}
+  .crash-reason{
+    margin:0; padding:10px 12px; border-radius:10px; background:#ffdad6;
+    color:#8c1d18; font:400 13px/20px var(--font); word-break:break-word;
+  }
+  .crash-log{
+    margin:0; flex:1 1 auto; min-height:120px; max-height:46vh; overflow:auto;
+    background:var(--low); border-radius:10px; padding:12px;
+    font:400 12px/18px ui-monospace, Consolas, monospace; color:var(--on);
+    white-space:pre-wrap; word-break:break-all;
+  }
+  .crash-row{display:flex; gap:8px; justify-content:flex-end; flex:0 0 auto}
+</style>
+
+<h1>游戏</h1>
+<div class="sub" id="root">正在读取…</div>
+
+<div class="bar">
+  <button class="quiet" id="refresh">刷新</button>
+  <button class="quiet" id="open">打开目录</button>
+</div>
+
+<div class="cols">
+  <div class="list" id="list"><div class="empty">正在读取…</div></div>
+  <aside class="side">
+    <div class="side-h">游戏目录</div>
+    <div class="roots" id="roots"></div>
+    <div class="side-b">
+      <button id="btnNewRoot">新建 .minecraft</button>
+      <button id="btnAddRoot">添加已有文件夹</button>
+      <button id="btnImport">导入整合包</button>
+    </div>
+  </aside>
+</div>
+<p class="status" id="status">在这里管理已安装的游戏版本。</p>
+<button class="cancel-launch" id="cancelLaunch" hidden>取消启动</button>
+
+<div class="menu" id="menu">
+  <button id="mRename">重命名</button>
+  <button id="mRemove">从列表移除</button>
+  <button id="mDelete" class="danger">删除文件夹</button>
+</div>
+
+<div class="mask" id="mask">
+  <div class="dialog">
+    <h3 id="dTitle">重命名</h3>
+    <p id="dText"></p>
+    <input id="dInput" spellcheck="false">
+    <div class="dacts">
+      <button id="dCancel">取消</button>
+      <button id="dOk" class="primary">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 崩溃窗口：原因 + 日志，和 PCL2 一样直接摆出来 -->
+<div class="crash" id="crash" hidden>
+  <div class="crash-box">
+    <h3>游戏崩溃了</h3>
+    <p class="crash-reason" id="crashReason"></p>
+    <pre class="crash-log" id="crashLog"></pre>
+    <div class="crash-row">
+      <button id="crashOpen">打开日志文件夹</button>
+      <button id="crashCopy">复制日志</button>
+      <button class="primary" id="crashClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const $ = s => document.querySelector(s);
+  /** 状态行：只显示最近一句话，不累积历史。 */
+  const log = (s, kind) => {
+    const p = $("#status");
+    p.textContent = s;
+    p.className = "status" + (kind ? " " + kind : "");
+  };
+  const mb = n => (n / 1048576).toFixed(1) + " MB";
+
+  let roots = [];
+  let rootFilter = "";
+  let menuFor = "";
+
+  async function loadRoots() {
+    try {
+      const r = await miy.call("miy.mc.roots", {}, 10000);
+      roots = (r && r.roots) || [];
+    } catch (e) { roots = []; }
+    renderRoots();
+  }
+
+  function renderRoots() {
+    const box = $("#roots");
+    const all = document.createElement("button");
+    all.className = "root-row" + (rootFilter ? "" : " on");
+    const allName = document.createElement("span");
+    allName.className = "nm";
+    allName.textContent = "全部目录";
+    const allCt = document.createElement("span");
+    allCt.className = "ct";
+    allCt.textContent = String(roots.reduce((n, r) => n + (r.versions || 0), 0));
+    all.append(allName, allCt);
+    all.onclick = () => { rootFilter = ""; renderRoots(); refresh(); };
+
+    const rows = roots.map(r => {
+      const b = document.createElement("button");
+      b.className = "root-row" + (rootFilter === r.path ? " on" : "");
+      b.title = r.path;
+      const nm = document.createElement("span");
+      nm.className = "nm";
+      nm.textContent = r.label || r.name;
+      const ct = document.createElement("span");
+      ct.className = "ct";
+      ct.textContent = String(r.versions || 0);
+      const more = document.createElement("button");
+      more.className = "more";
+      more.textContent = "⋯";
+      more.title = "更多操作";
+      more.onclick = e => { e.stopPropagation(); openMenu(more, r.path); };
+      b.append(nm, ct, more);
+      b.onclick = () => { rootFilter = r.path; renderRoots(); refresh(); };
+      return b;
+    });
+    box.replaceChildren(all, ...rows);
+  }
+
+  function openMenu(anchor, path) {
+    menuFor = path;
+    const m = $("#menu");
+    const r = anchor.getBoundingClientRect();
+    m.classList.add("on");
+    const w = m.offsetWidth || 140;
+    const h = m.offsetHeight || 120;
+    // 侧栏里的「⋯」：菜单往左弹，别盖住侧栏自己的按钮。
+    const side = anchor.closest(".side");
+    let left, top;
+    if (side) {
+      const s = side.getBoundingClientRect();
+      left = s.left - w - 6;
+      top = r.top;
+    } else {
+      left = r.right - w;
+      top = r.bottom + 4;
+    }
+    left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
+    top = Math.max(8, Math.min(top, window.innerHeight - h - 8));
+    m.style.left = left + "px";
+    m.style.top = top + "px";
+  }
+  function closeMenu() { $("#menu").classList.remove("on"); menuFor = ""; }
+  document.addEventListener("click", e => {
+    if (!e.target.closest("#menu") && !e.target.closest(".more")) closeMenu();
+  });
+  window.addEventListener("blur", closeMenu);
+
+  /** 通用弹窗：有输入框就是改名，没有就是确认。 */
+  function dialog({ title, text, value, okText, danger }) {
+    return new Promise(resolve => {
+      $("#dTitle").textContent = title;
+      $("#dText").textContent = text || "";
+      const input = $("#dInput");
+      input.value = value == null ? "" : value;
+      input.style.display = value == null ? "none" : "";
+      const ok = $("#dOk");
+      ok.textContent = okText || "确定";
+      ok.className = danger ? "danger" : "primary";
+      $("#mask").classList.add("on");
+      if (value != null) { input.focus(); input.select(); }
+
+      const done = v => {
+        $("#mask").classList.remove("on");
+        ok.onclick = null; $("#dCancel").onclick = null;
+        input.onkeydown = null; $("#mask").onclick = null;
+        resolve(v);
+      };
+      ok.onclick = () => done(value == null ? true : input.value.trim());
+      $("#dCancel").onclick = () => done(value == null ? false : null);
+      $("#mask").onclick = e => { if (e.target === $("#mask")) done(value == null ? false : null); };
+      input.onkeydown = e => {
+        if (e.key === "Enter") done(input.value.trim());
+        if (e.key === "Escape") done(null);
+      };
+    });
+  }
+
+  async function renameRoot(path) {
+    const cur = path.split(/[\\/]/).filter(Boolean).pop() || "";
+    const name = await dialog({
+      title: "重命名游戏目录",
+      text: "文件夹会一起改名，里面的版本不受影响。",
+      value: cur,
+      okText: "改名",
+    });
+    if (!name || name === cur) return;
+    try {
+      const r = await miy.call("miy.mc.root.rename", { path, name }, 20000);
+      if (!r || r.ok === false) { log((r && r.error) || "改名失败。", "bad"); return; }
+      if (rootFilter === path) rootFilter = r.path;
+      log("已改名为 " + name + "。", "on");
+      await loadRoots();
+      await refresh();
+    } catch (e) { log("改名失败：" + (e.message || e), "bad"); }
+  }
+
+  async function removeRoot(path, del) {
+    const name = path.split(/[\\/]/).filter(Boolean).pop() || path;
+    const ok = await dialog({
+      title: del ? "删除文件夹" : "从列表移除",
+      text: del
+        ? "会连同 " + name + " 里的所有版本、存档、模组一起删除，无法恢复。"
+        : "只是不再显示这个目录，磁盘上的文件不会动。",
+      okText: del ? "删除" : "移除",
+      danger: del,
+    });
+    if (!ok) return;
+    try {
+      const r = await miy.call("miy.mc.root.remove", { path, delete: !!del }, 60000);
+      if (!r || r.ok === false) { log((r && r.error) || "操作失败。", "bad"); return; }
+      if (rootFilter === path) rootFilter = "";
+      log(del ? "已删除 " + name + "。" : "已从列表移除 " + name + "。", "on");
+      await loadRoots();
+      await refresh();
+    } catch (e) { log("操作失败：" + (e.message || e), "bad"); }
+  }
+
+  $("#mRename").onclick = () => { const p = menuFor; closeMenu(); if (p) renameRoot(p); };
+  $("#mRemove").onclick = () => { const p = menuFor; closeMenu(); if (p) removeRoot(p, false); };
+  $("#mDelete").onclick = () => { const p = menuFor; closeMenu(); if (p) removeRoot(p, true); };
+
+  async function refresh() {
+    const r = await miy.call("miy.mc.installed", {});
+    const all = (r && r.versions) || [];
+    const list = rootFilter ? all.filter(v => v.root === rootFilter) : all;
+    $("#root").textContent = rootFilter
+      ? "这个目录里有 " + list.length + " 个版本"
+      : "已安装 " + list.length + " 个版本";
+    $("#root").title = rootFilter || r.root || "";
+    const box = $("#list");
+    if (!list.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = rootFilter ? "这个目录里还没有版本。" : "尚未安装任何版本，可在「版本」页面安装一个。";
+      box.replaceChildren(empty);
+      return;
+    }
+    const rows = list.map(v => {
+      const row = document.createElement("div");
+      row.className = "v mgr";
+      // 点整行（不是按钮）进版本详情页：改名、看位置、删除、启动都在那一页。
+      row.onclick = e => {
+        if (e.target.closest("button")) return;
+        miy.goto("page:miy.mc/detail?name=" + encodeURIComponent(v.id));
+      };
+
+      const left = document.createElement("div");
+      left.className = "left";
+      const id = document.createElement("span");
+      id.className = "id";
+      id.textContent = v.id;
+      left.append(id);
+
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      const chips = [];
+      if (v.mc && v.mc !== v.id) chips.push("Minecraft " + v.mc);
+      const loader = v.loader || "原版";
+      chips.push(loader === "原版" ? "正式版" : loader + (v.loaderVer ? " " + v.loaderVer : ""));
+      if (v.java) chips.push("Java " + v.java);
+      if (v.released) chips.push(v.released.slice(0, 10));
+      for (const c of chips) {
+        const s = document.createElement("span");
+        s.className = "chipmini" + (c === "正式版" ? "" : " hl");
+        s.textContent = c;
+        meta.append(s);
+      }
+      // 装了一半的版本不该看起来和正常版本一样 —— 标出来，并且允许删掉。
+      const broken = v.ok === false;
+      if (broken) {
+        const s = document.createElement("span");
+        s.className = "chipmini warn";
+        s.textContent = v.incomplete ? "未装完" : "缺少文件";
+        meta.append(s);
+      }
+      left.append(meta);
+
+      const size = document.createElement("span");
+      size.className = "size";
+      size.textContent = v.jar ? mb(v.jar) : "";
+
+      const flex = document.createElement("div");
+      flex.className = "flex";
+
+      const go = document.createElement("button");
+      go.className = "go";
+      go.textContent = broken ? "重新安装" : "启动";
+      if (broken) {
+        go.onclick = () => reinstall(v.id);
+      } else {
+        go.disabled = !v.runnable;
+        go.onclick = () => launch(v.id);
+      }
+
+      row.append(left, flex, size);
+      if (broken) {
+        const del = document.createElement("button");
+        del.className = "go ghost";
+        del.textContent = "删除";
+        del.onclick = () => removeVersion(v.id);
+        row.append(del);
+      }
+      row.append(go);
+      return row;
+    });
+    rows.forEach((row, i) => { row.style.animationDelay = Math.min(i, 8) * 22 + "ms"; });
+    box.replaceChildren(...rows);
+  }
+
+  async function reinstall(name) {
+    log('正在重新安装 ' + name + '，缺少的文件将自动补齐…', 'busy');
+    try {
+      const r = await miy.call('miy.mc.install', { id: name, name }, 3600000);
+      if (r && r.ok) {
+        log(name + ' 已安装完成。', 'on');
+        await refresh();
+      } else if (r && r.cancelled) {
+        log('已取消安装，这次下载的文件已清理。');
+        await refresh();
+      } else {
+        log((r && r.error) || '安装未完成。', 'bad');
+      }
+    } catch (e) {
+      log('安装没有完成，请稍后重试。', 'bad');
+    }
+  }
+
+  async function removeVersion(name) {
+    try {
+      const r = await miy.call("miy.mc.remove", { name }, 20000);
+      if (!r || r.ok === false) {
+        log((r && r.error) || "删除失败。", "bad");
+        return;
+      }
+      log(name + " 已删除。");
+      await refresh();
+    } catch (e) {
+      log("删除失败：" + (e.message || e), "bad");
+    }
+  }
+
+  async function launch(id) {
+    log("正在启动游戏…");
+    launching = true;
+    $("#cancelLaunch").hidden = false;
+    try {
+      let r = await miy.call("miy.mc.launch", { id }, 120000);
+      if (r && r.ok === false && r.code === "incomplete") {
+        log("该版本缺少必要文件，正在自动补齐…", "busy");
+        await miy.call("miy.mc.install", { id, name: id }, 3600000);
+        await miy.call("miy.mc.assets", { id }, 3600000);
+        r = await miy.call("miy.mc.launch", { id }, 120000);
+      }
+      if (r && r.ok) log("游戏已启动。", "on");
+      else if (r && r.code === "cancelled") log("已取消启动。", "on");
+      else log((r && r.error) || "启动失败，请稍后再试。", "bad");
+    } catch (e) {
+      log("启动失败，请稍后再试。", "bad");
+    } finally {
+      launching = false;
+      $("#cancelLaunch").hidden = true;
+    }
+  }
+
+  let launching = false;
+  $("#cancelLaunch").onclick = async () => {
+    const b = $("#cancelLaunch");
+    b.disabled = true;
+    b.textContent = "正在取消…";
+    try { await miy.call("miy.mc.launch.cancel", {}, 15000); } catch (e) {}
+    log("已取消启动。", "on");
+    b.disabled = false;
+    b.textContent = "取消启动";
+  };
+
+  $("#refresh").onclick = () => refresh().catch(() => log("读取失败，请稍后再试。", "bad"));
+
+  $("#open").onclick = () => {
+    // 打开当前选中的目录；没选就打开列表里第一个。
+    const target = rootFilter || (roots[0] && roots[0].path);
+    if (!target) { log("还没有可打开的游戏目录。", "bad"); return; }
+    miy.call("miy.app.open", { path: target }).catch(() => {});
+  };
+
+  // 新建 / 添加 / 导入：和 PCL2 的「添加或导入」一致，三个入口各自独立。
+  $("#btnNewRoot").onclick = async () => {
+    try {
+      const pick = await miy.call("miy.app.pickFolder", { title: "选择新 .minecraft 的位置" }, 120000);
+      if (!pick || pick.cancelled || !pick.path) return;
+      const base = pick.path.replace(/[\\/]+$/, "");
+      const path = /\.minecraft$/i.test(base) ? base : base + "\\.minecraft";
+      const r = await miy.call("miy.mc.root.add", { path, create: true }, 20000);
+      if (!r || r.ok === false) { log((r && r.error) || "新建失败。", "bad"); return; }
+      log("已新建 " + path + "。", "on");
+      await loadRoots();
+      await refresh();
+    } catch (e) { log("新建失败：" + (e.message || e), "bad"); }
+  };
+
+  $("#btnAddRoot").onclick = async () => {
+    try {
+      const pick = await miy.call("miy.app.pickFolder", { title: "选择已有的 .minecraft 文件夹" }, 120000);
+      if (!pick || pick.cancelled || !pick.path) return;
+      const r = await miy.call("miy.mc.root.add", { path: pick.path, create: false }, 20000);
+      if (!r || r.ok === false) { log((r && r.error) || "添加失败。", "bad"); return; }
+      log("已添加 " + pick.path + "。", "on");
+      await loadRoots();
+      await refresh();
+    } catch (e) { log("添加失败：" + (e.message || e), "bad"); }
+  };
+
+  $("#btnImport").onclick = async () => {
+    try {
+      const pick = await miy.call("miy.app.pickFile", { title: "选择整合包" }, 120000);
+      if (!pick || pick.cancelled || !pick.path) return;
+      log("正在导入整合包…", "busy");
+      const r = await miy.call("miy.mc.import", { path: pick.path }, 600000);
+      if (!r || r.ok === false) { log((r && r.error) || "导入失败。", "bad"); return; }
+      log("已导入 " + (r.name || "整合包") + "。", "on");
+      await loadRoots();
+      await refresh();
+    } catch (e) { log("导入失败：" + (e.message || e), "bad"); }
+  };
+
+  let lastCrash = null;
+  function showCrash(p) {
+    lastCrash = p || {};
+    $("#crashReason").textContent = (p && p.reason) || "游戏异常退出。";
+    $("#crashLog").textContent = (p && p.log) || "没有读到游戏日志，可以打开日志文件夹查看。";
+    $("#crash").hidden = false;
+  }
+  $("#crashClose").onclick = () => { $("#crash").hidden = true; };
+  $("#crashOpen").onclick = () => {
+    const dir = lastCrash && lastCrash.dir;
+    if (dir) miy.call("miy.app.open", { path: dir + "\\logs" }).catch(() => {});
+  };
+  $("#crashCopy").onclick = () => {
+    miy.call("miy.app.clipboard", { text: $("#crashLog").textContent || "" }).catch(() => {});
+  };
+
+  miy.onEvent(({ topic, payload }) => {
+    if (topic === "mc.progress" && payload) {
+      const done = payload.done || 0;
+      const total = payload.total || 0;
+      log(total ? "正在下载 " + done + " / " + total : "正在下载…");
+    } else if (topic === "mc.exit") {
+      const code = payload && payload.code;
+      log(code === 0 ? "游戏已退出。" : "游戏意外退出，正在读取崩溃原因…", code === 0 ? "on" : "bad");
+    } else if (topic === "mc.crash") {
+      showCrash(payload);
+      log("游戏崩溃了，原因见弹窗。", "bad");
+    }
+  });
+
+  (async () => {
+    await loadRoots();
+    await refresh();
+  })().catch(() => log("读取失败，请稍后再试。", "bad"));
+</script>

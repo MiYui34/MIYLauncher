@@ -1,0 +1,15 @@
+[package]
+name = "miy-abi"
+description = "MIYLauncher 插件 ABI v1 —— 宿主与插件共享的唯一契约"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# 只在宿主侧解析 manifest 时打开，插件作者不必拖 serde
+manifest = ["dep:serde", "dep:serde_json"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
