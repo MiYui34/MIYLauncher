@@ -42,10 +42,3 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Verify  #
 ## 插件开发
 
 `docs/plugin-dev.md` 是完整的第三方插件指南（ABI、清单字段、服务清单、页面桥、权限与常见坑）。
-
-## 关于这个仓库
-
-公开的是**启动器本体 + 插件框架 + 插件实现 + 文档**。
-
-以下内容不在仓库里（`.gitignore` 已排除）：后端服务与部署脚本、对象存储与隧道相关的内部文档、
-服务器截图，以及反编译所得的第三方代码。
