@@ -133,11 +133,16 @@ try {
         else { Write-Host "  [FAIL] spike 自检返回 $code" -ForegroundColor Red }
 
         Write-Host ''
-        Write-Host '== 窗口按钮验收（无边框窗口的自绘按钮）=='
+        # 窗口按钮验收脚本属于本地测试工具，仓库里没有；有就跑，没有就跳过。
         $winScript = Join-Path $PSScriptRoot 'verify-window.ps1'
-        & $winScript -Exe $exe 2>&1 | ForEach-Object { Write-Host "$_" }
-        $winCode = $LASTEXITCODE
-        if ($winCode -ne 0) { $code = $winCode }
+        if (Test-Path $winScript) {
+            Write-Host '== 窗口按钮验收（无边框窗口的自绘按钮）=='
+            & $winScript -Exe $exe 2>&1 | ForEach-Object { Write-Host "$_" }
+            $winCode = $LASTEXITCODE
+            if ($winCode -ne 0) { $code = $winCode }
+        } else {
+            Write-Host '  [skip] 没有 verify-window.ps1，跳过窗口按钮验收' -ForegroundColor Yellow
+        }
 
         Write-Host ''
         if ($code -eq 0) { Write-Host '  [OK] 全部验收通过' -ForegroundColor Green }
