@@ -181,6 +181,7 @@
 <div class="bar">
   <div class="dd" id="catdd"></div>
   <button id="refresh">刷新</button>
+  <button id="import">导入整合包</button>
 </div>
 
 <div class="list" id="list"></div>
@@ -729,6 +730,30 @@
     btn.disabled = false;
   };
   $("#refresh").onclick = () => { loadInstalled().then(load); };
+
+  // 导入整合包：`.mrpack` 会连原版和加载器一起装成一个版本；
+  // 普通压缩包按老规矩，把 mods/config 铺进同版本的实例目录。
+  $("#import").onclick = async () => {
+    const btn = $("#import");
+    btn.disabled = true;
+    try {
+      const pick = await miy.call("miy.app.pickFile", { title: "选择整合包" }, 600000);
+      if (!pick || !pick.ok || !pick.path) return;
+      log("正在导入整合包…", "busy");
+      const r = await miy.call("miy.mc.import", { path: pick.path }, 3600000);
+      if (r && r.ok) {
+        log("整合包已导入：" + (r.name || "") + "（" + (r.files || 0) + " 个文件）", "on");
+        await loadInstalled();
+        await load();
+      } else {
+        log("导入失败：" + ((r && r.error) || "未知错误"), "bad");
+      }
+    } catch (e) {
+      log("导入失败：" + (e && e.message || e), "bad");
+    } finally {
+      btn.disabled = false;
+    }
+  };
 
   (async () => {
     await loadInstalled();

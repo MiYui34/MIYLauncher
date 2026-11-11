@@ -272,6 +272,12 @@
     margin:0; padding:10px 12px; border-radius:10px; background:#ffdad6;
     color:#8c1d18; font:400 13px/20px var(--font); word-break:break-word;
   }
+  /* 「怎么办」用次级容器色，和红色的「为什么」区分开 */
+  .crash-advice{
+    margin:0; padding:10px 12px; border-radius:10px; background:var(--s-cont);
+    color:var(--on-s-cont); font:400 13px/20px var(--font); word-break:break-word;
+  }
+  .crash-advice[hidden]{display:none}
   .crash-log{
     margin:0; flex:1 1 auto; min-height:120px; max-height:46vh; overflow:auto;
     background:var(--low); border-radius:10px; padding:12px;
@@ -365,6 +371,7 @@
   <div class="crash-box">
     <h3 id="crashTitle">游戏崩溃了</h3>
     <p class="crash-reason" id="crashReason"></p>
+<p class="crash-advice" id="crashAdvice" hidden></p>
     <pre class="crash-log" id="crashLog"></pre>
     <div class="crash-row">
       <button class="ghost" id="crashOpen">打开日志文件夹</button>
@@ -904,6 +911,10 @@
   function showCrash(p) {
     lastCrash = p || {};
     $("#crashReason").textContent = (p && p.reason) || "游戏异常退出。";
+    // 规则命中时后端会给一句「怎么办」；没命中就整行藏起来，不留空框。
+    const advice = (p && p.advice) || "";
+    $("#crashAdvice").textContent = advice;
+    $("#crashAdvice").hidden = !advice;
     $("#crashLog").textContent = (p && p.log) || "没有读到游戏日志，可以打开日志文件夹查看。";
     $("#crash").hidden = false;
   }

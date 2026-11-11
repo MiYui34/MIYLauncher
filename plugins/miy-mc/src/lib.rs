@@ -16,8 +16,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod crash;
 mod dl;
 mod java;
+mod pack;
 
 const ID: &[u8] = b"miy.mc\0";
 const VERSION: &[u8] = b"0.1.0\0";
@@ -1946,6 +1948,12 @@ fn service_import(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
         return Err("缺少整合包路径".into());
     }
     let bytes = std::fs::read(&path).map_err(|e| format!("读不了这个文件：{e}"))?;
+    // `.mrpack` 走 Modrinth 那条路：它自带清单，要连原版和加载器一起装，
+    // 跟"把 mods 铺进一个已经装好的版本"是两件事。
+    if pack::is_mrpack(&bytes) {
+        let root = game_root(h, req);
+        return modpack_install_bytes(h, req, &root, &bytes);
+    }
     let entries = zip_list(&bytes).map_err(|e| format!("这不是有效的整合包：{e}"))?;
     let find = |name: &str| entries.iter().find(|e| e.name.eq_ignore_ascii_case(name));
 
@@ -2027,6 +2035,191 @@ fn service_import(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
         "root": root,
         "mc": mc,
         "files": files,
+    }))
+    .unwrap_or_default())
+}
+
+/// 整合包本体：本地路径直接读，URL 先下到 `cache/packs` 再读。
+fn pack_bytes(h: &MiyHostV1, req: &Value, root: &str) -> Result<Vec<u8>, String> {
+    if let Some(p) = field(req, "path").map(str::trim).filter(|s| !s.is_empty()) {
+        return std::fs::read(p).map_err(|e| format!("读不了这个整合包：{e}"));
+    }
+    let url = field(req, "url")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or("缺少整合包路径或下载地址")?;
+    let dir = format!("{root}\\cache\\packs");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建缓存目录：{e}"))?;
+    let raw = url.rsplit('/').next().unwrap_or("pack.mrpack");
+    let name: String = raw
+        .chars()
+        .map(|c| if "\\/:*?\"<>|".contains(c) { '_' } else { c })
+        .collect();
+    let file = format!("{dir}\\{name}");
+    download(h, url, &file, 0)?;
+    std::fs::read(&file).map_err(|e| format!("读不了下载好的整合包：{e}"))
+}
+
+/// 导入 Modrinth 整合包（`.mrpack`）：一次装成一个能直接启动的版本。
+///
+/// 顺序是「先装原版 + 加载器，再往实例目录里铺文件」。装原版复用 `service_install`
+/// （它已经会合并加载器、复用本地 jar、发进度），所以整合包实例和手动装的版本
+/// 在磁盘上是同一种东西，启动路径不用分叉。
+fn service_modpack_install(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
+    let root = game_root(h, req);
+    let bytes = pack_bytes(h, req, &root)?;
+    modpack_install_bytes(h, req, &root, &bytes)
+}
+
+/// 已经拿到包体之后的安装流程（`service_import` 认出 `.mrpack` 时也走这里，
+/// 免得同一个文件读两遍）。
+fn modpack_install_bytes(
+    h: &MiyHostV1,
+    req: &Value,
+    root: &str,
+    bytes: &[u8],
+) -> Result<Vec<u8>, String> {
+    let pack = pack::read_index(bytes)?;
+    if !pack.loader.is_empty() && !matches!(pack.loader.as_str(), "fabric" | "quilt") {
+        return Err(format!(
+            "暂不支持 {} 整合包（目前只支持 Fabric / Quilt）",
+            pack.loader
+        ));
+    }
+
+    // 版本目录名：用户指定 > 包名。重名就加序号，绝不覆盖已经装好的实例
+    // （整合包里的存档、配置是用户的东西，覆盖等于删档）。
+    let base: String = field(req, "name")
+        .map(str::to_string)
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| pack.name.clone())
+        .chars()
+        .map(|c| if "\\/:*?\"<>|".contains(c) { '_' } else { c })
+        .collect();
+    let base = base.trim().to_string();
+    let base = if base.is_empty() { format!("{} 整合包", pack.mc) } else { base };
+    let versions = std::path::Path::new(root).join("versions");
+    let mut name = base.clone();
+    let mut n = 2;
+    while versions.join(&name).exists() {
+        name = format!("{base}-{n}");
+        n += 1;
+    }
+
+    // 原版是整合包实例的"底座"：实例 json 用 `inheritsFrom` 借它的客户端 jar
+    // 和运行库，所以原版必须真的在磁盘上。装过就直接用 —— 不重复校验，
+    // 否则每装一个整合包都要把 41 MB 的 jar 和 60 个库再核一遍。
+    let base_dir = versions.join(&pack.mc);
+    let base_ok = base_dir.join(format!("{}.json", pack.mc)).is_file()
+        && base_dir.join(format!("{}.jar", pack.mc)).is_file()
+        && !base_dir.join(".incomplete").is_file();
+    if !base_ok {
+        let ireq = json!({ "id": pack.mc, "name": pack.mc, "root": root });
+        let out = service_install(h, &ireq)?;
+        let outv: Value = serde_json::from_slice(&out).unwrap_or(Value::Null);
+        if !outv.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+            // 原版都没装成，整合包的文件下了也没用：把安装的错误原样交给界面。
+            return Ok(out);
+        }
+    }
+
+    // 实例目录：只放这个包自己的东西（mods/config/存档），jar 与运行库都借原版的。
+    // 这样装十个整合包也只占一份 Minecraft。
+    let dir = versions.join(&name);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建实例目录：{e}"))?;
+    for sub in [
+        "mods",
+        "saves",
+        "config",
+        "logs",
+        "resourcepacks",
+        "shaderpacks",
+        "crash-reports",
+    ] {
+        let _ = std::fs::create_dir_all(dir.join(sub));
+    }
+    let mut meta = if pack.loader.is_empty() {
+        json!({
+            "id": name,
+            "inheritsFrom": pack.mc,
+            "type": "release",
+            "releaseTime": "1970-01-01T00:00:00+00:00",
+        })
+    } else {
+        // 加载器的 profile 自带 mainClass / 库 / 参数，改个名字挂到原版下面即可。
+        let mut prof = fetch_loader_profile(h, &pack.loader, &pack.mc, &pack.loader_ver)?;
+        prof["id"] = json!(name);
+        prof["inheritsFrom"] = json!(pack.mc);
+        prof["clientVersion"] = json!(pack.mc);
+        prof
+    };
+    if meta.get("type").is_none() {
+        meta["type"] = json!("release");
+    }
+    let json_path = dir.join(format!("{name}.json"));
+    std::fs::write(
+        &json_path,
+        serde_json::to_vec_pretty(&meta).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("无法写入 {json_path:?}：{e}"))?;
+    let dir = dir.to_string_lossy().into_owned();
+
+    // `files[]` 的路径是相对实例目录的（`mods/x.jar`、`config/y.json`），
+    // 而 `fetch_all` 的路径是相对游戏根目录的，所以这里补上 `versions/<name>/`。
+    let items: Vec<Item> = pack
+        .files
+        .iter()
+        .map(|f| Item {
+            path: format!("versions/{name}/{}", f.path),
+            url: f.url.clone(),
+            size: f.size,
+            sha1: f.sha1.clone(),
+        })
+        .collect();
+    let total_bytes: u64 = items.iter().map(|i| i.size).sum();
+    let (task, cancel) = task_new(
+        "modpack",
+        &format!("安装整合包 {name}"),
+        items.len() as u64,
+    );
+    let got = fetch_all(
+        h,
+        root,
+        &items,
+        concurrency(h),
+        (items.len() / 20).max(1),
+        Some(task),
+        Some(&cancel),
+    );
+    if got.cancelled {
+        task_cancelled(task, "已取消，已下载的文件保留在实例目录里");
+    } else {
+        task_finish(task, got.errors.is_empty(), got.errors.first().map(String::as_str).unwrap_or(""));
+    }
+
+    // 散文件最后铺：`client-overrides/` 会盖掉 `overrides/` 里的同名文件。
+    let overrides = pack::extract_overrides(bytes, &dir).unwrap_or(0);
+
+    unsafe {
+        h.emit_str(
+            "mc.modpack.installed",
+            format!(r#"{{"name":"{name}","mc":"{}"}}"#, pack.mc).as_bytes(),
+        );
+    }
+    Ok(serde_json::to_vec(&json!({
+        "ok": got.errors.is_empty() && !got.cancelled,
+        "name": name,
+        "dir": dir,
+        "root": root,
+        "mc": pack.mc,
+        "loader": pack.loader,
+        "loaderVersion": pack.loader_ver,
+        "files": items.len(),
+        "bytes": total_bytes,
+        "downloaded": got.done,
+        "overrides": overrides,
+        "cancelled": got.cancelled,
+        "errors": got.errors,
     }))
     .unwrap_or_default())
 }
@@ -2876,9 +3069,11 @@ fn service_install(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
     };
     // Fabric 版本装完顺手带上 Fabric API：绝大多数 Fabric 模组都依赖它。
     // 失败不影响安装结果，只把原因带回去让界面提示一句。
+    // 整合包自己列了 Fabric API 时（`noFabricApi`）就别再塞一份，否则 mods 里会有两个。
     let mut fabric_api = String::new();
     let mut fabric_api_error = String::new();
-    if ok && is_fabric_version(&v) {
+    let skip_api = req.get("noFabricApi").and_then(Value::as_bool).unwrap_or(false);
+    if ok && !skip_api && is_fabric_version(&v) {
         let mc_ver = v
             .get("inheritsFrom")
             .and_then(Value::as_str)
@@ -3045,6 +3240,42 @@ fn file_ok(root: &str, it: &Item) -> bool {
             .unwrap_or(false),
         None => true,
     }
+}
+
+/// 数一数还缺多少运行库 / 资源对象。
+///
+/// 启动前自检和「补齐后复查」用的是同一套判据，抽出来免得两处漂移：
+/// 运行库看文件在不在（类路径最后一项是客户端 jar，单独算），资源对象
+/// 还要看长度对不对 —— 中断过的下载会留下长度不对的文件，游戏读到它
+/// 一样在 TextureManager / LinkFSProvider 里炸，而且崩得比缺文件更晚。
+fn missing_counts(
+    root: &str,
+    cp: &[String],
+    native_jars: &[String],
+    index: Option<&Value>,
+) -> (usize, usize) {
+    let libs = cp[..cp.len().saturating_sub(1)]
+        .iter()
+        .filter(|p| !std::path::Path::new(p.as_str()).is_file())
+        .count()
+        + native_jars
+            .iter()
+            .filter(|p| !std::path::Path::new(p.as_str()).is_file())
+            .count();
+    let assets = match index {
+        Some(ix) => asset_items(ix)
+            .iter()
+            .filter(|i| {
+                let path = format!("{root}\\{}", i.path.replace('/', "\\"));
+                match std::fs::metadata(&path) {
+                    Ok(meta) => i.size > 0 && meta.len() != i.size,
+                    Err(_) => true,
+                }
+            })
+            .count(),
+        None => 0,
+    };
+    (libs, assets)
 }
 
 /// 资源重补：把已装版本里缺的、大小不对的、sha1 不对的文件重新下回来。
@@ -3474,6 +3705,10 @@ fn forward_lines<R: std::io::Read>(pipe: R, cell: &HostCell, prefix: &str) {
 
 struct CrashInfo {
     reason: String,
+    /// 怎么办。规则没命中时为空，界面就不显示这一行。
+    advice: String,
+    /// 命中的规则名，写进日志方便排查。
+    rule: &'static str,
     log: String,
     crash: String,
 }
@@ -3502,11 +3737,11 @@ fn version_usable(dir: &std::path::Path, name: &str, base: &str) -> bool {
     jar_ok || base_jar
 }
 
-/// 从版本目录里找崩溃原因：优先 crash-reports 里的 Description，其次日志尾巴。
-/// PCL2 的崩溃窗口也是这么做的 —— 玩家要的是「为什么崩」，不是「崩了」。
-fn crash_info(dir: &str, code: i32) -> CrashInfo {
-    let mut reason = format!("游戏异常退出（退出代码 {code}）");
+/// 从版本目录里找崩溃原因：先跑规则表，没命中再退回 crash-report 的 Description。
+/// PCL2 的崩溃窗口也是这么做的 —— 玩家要的是「为什么崩、怎么办」，不是「崩了」。
+fn crash_info(dir: &str, code: i32, java_major: Option<u32>, required: Option<u32>) -> CrashInfo {
     let mut crash_path = String::new();
+    let mut crash_text = String::new();
     let reports = std::path::Path::new(dir).join("crash-reports");
     let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
     if let Ok(rd) = std::fs::read_dir(&reports) {
@@ -3531,19 +3766,7 @@ fn crash_info(dir: &str, code: i32) -> CrashInfo {
     if let Some((_, p)) = newest {
         crash_path = p.to_string_lossy().into_owned();
         if let Some(text) = read_text(&crash_path) {
-            let mut lines = text.lines();
-            while let Some(l) = lines.next() {
-                if let Some(rest) = l.trim_start().strip_prefix("Description:") {
-                    let head = rest.trim();
-                    let next = lines.next().unwrap_or("").trim();
-                    reason = if next.is_empty() {
-                        head.to_string()
-                    } else {
-                        format!("{head}：{next}")
-                    };
-                    break;
-                }
-            }
+            crash_text = text;
         }
     }
     let mut log = String::new();
@@ -3552,7 +3775,41 @@ fn crash_info(dir: &str, code: i32) -> CrashInfo {
         let start = lines.len().saturating_sub(80);
         log = lines[start..].join("\n");
     }
-    CrashInfo { reason, log, crash: crash_path }
+
+    // 规则表：把堆栈翻成「人话 + 怎么办」。命中就不再看 Description 了 ——
+    // Description 是给开发者看的（"Rendering overlay"），玩家看不懂。
+    let facts = crash::Facts {
+        crash: &crash_text,
+        log: &log,
+        code,
+        java_major,
+        required_java: required,
+    };
+    if let Some(d) = crash::diagnose(&facts) {
+        return CrashInfo {
+            reason: d.title,
+            advice: d.advice,
+            rule: d.rule,
+            log,
+            crash: crash_path,
+        };
+    }
+
+    let mut reason = format!("游戏异常退出（退出代码 {code}）");
+    let mut lines = crash_text.lines();
+    while let Some(l) = lines.next() {
+        if let Some(rest) = l.trim_start().strip_prefix("Description:") {
+            let head = rest.trim();
+            let next = lines.next().unwrap_or("").trim();
+            reason = if next.is_empty() {
+                head.to_string()
+            } else {
+                format!("{head}：{next}")
+            };
+            break;
+        }
+    }
+    CrashInfo { reason, advice: String::new(), rule: "", log, crash: crash_path }
 }
 
 
@@ -4890,43 +5147,70 @@ fn service_launch_inner(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
         .unwrap_or("legacy")
         .to_string();
 
-    let missing_libs = cp[..cp.len().saturating_sub(1)]
-        .iter()
-        .filter(|p| !std::path::Path::new(p.as_str()).is_file())
-        .count()
-        // natives 包也要在：缺一个 dll 包，老版本会在 `UnsatisfiedLinkError` 里直接死。
-        + native_jars
-            .iter()
-            .filter(|p| !std::path::Path::new(p.as_str()).is_file())
-            .count();
-    let (missing_assets, assets_known) = {
-        let index_path = format!("{root}\\assets\\indexes\\{assets_id}.json");
-        match std::fs::read_to_string(&index_path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        {
-            Some(index) => {
-                // 光判存在不够：中断过的下载会留下长度不对的文件，游戏读到它
-                // 一样在 TextureManager / LinkFSProvider 里炸 —— 而且崩得比缺
-                // 文件更晚、更难查（用户看到的是"改了语言之后游戏崩了"）。
-                let n = asset_items(&index)
-                    .iter()
-                    .filter(|i| {
-                        let path = format!("{root}\\{}", i.path.replace('/', "\\"));
-                        match std::fs::metadata(&path) {
-                            Ok(meta) => i.size > 0 && meta.len() != i.size,
-                            Err(_) => true,
-                        }
-                    })
-                    .count();
-                (n, true)
-            }
-            None => (0, false),
-        }
-    };
+    let index_path = format!("{root}\\assets\\indexes\\{assets_id}.json");
+    let index: Option<Value> = std::fs::read_to_string(&index_path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    let assets_known = index.is_some();
+    let (mut missing_libs, mut missing_assets) =
+        missing_counts(&root, &cp, &native_jars, index.as_ref());
     if launch_cancelled() {
         return Ok(launch_cancelled_payload(id, &root));
     }
+
+    // P1-5：缺文件先自己补，别一上来就甩「请补齐后再启动」。
+    // PCL2 的「预启动处理」就是这个思路 —— 玩家点启动，启动器该把缺的东西
+    // 悄悄补上；只有补不齐（比如镜像挂了）才值得打断他。
+    if (missing_libs > 0 || missing_assets > 0) && assets_known {
+        let mut fix: Vec<Item> = Vec::new();
+        let (libs, extra) = plan(&v, id);
+        for it in libs.into_iter().chain(extra) {
+            if !file_ok(&root, &it) {
+                fix.push(it);
+            }
+        }
+        if let Some(ix) = index.as_ref() {
+            for it in asset_items(ix) {
+                if !file_ok(&root, &it) {
+                    fix.push(it);
+                }
+            }
+        }
+        if !fix.is_empty() {
+            unsafe {
+                h.log_str(
+                    MIY_LOG_INFO,
+                    &format!("启动前自检：缺 {} 个文件，正在静默补齐", fix.len()),
+                );
+            }
+            let (task, cancel) =
+                task_new("repair", &format!("启动前补齐 {id}"), fix.len() as u64);
+            let got = fetch_all(
+                h,
+                &root,
+                &fix,
+                concurrency(h),
+                (fix.len() / 50).max(1),
+                Some(task),
+                Some(&cancel),
+            );
+            if got.cancelled {
+                return Ok(launch_cancelled_payload(id, &root));
+            }
+            let (l2, a2) = missing_counts(&root, &cp, &native_jars, index.as_ref());
+            missing_libs = l2;
+            missing_assets = a2;
+            if missing_libs == 0 && missing_assets == 0 {
+                unsafe {
+                    h.log_str(
+                        MIY_LOG_INFO,
+                        &format!("启动前补齐完成：{} 个文件", fix.len()),
+                    );
+                }
+            }
+        }
+    }
+
     if missing_libs > 0 || missing_assets > 0 || !assets_known {
         let mut parts: Vec<String> = Vec::new();
         if missing_libs > 0 {
@@ -5239,6 +5523,10 @@ fn service_launch_inner(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
     let cell = HostCell(*h);
     let id_owned = id.to_string();
     let crash_dir = version_dir.clone();
+    // 崩溃分析要拿「实际用的 Java」和「版本要求的 Java」比大小，两个都是 u32，
+    // 直接拷进闭包，别让线程去读共享状态。
+    let crash_java = java_ver;
+    let crash_need = need_java;
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
         let err_cell = HostCell(cell.0);
@@ -5259,12 +5547,26 @@ fn service_launch_inner(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
         unsafe { cell.h().emit_str("mc.exit", &payload) };
         // 非正常退出：把「为什么」和日志尾巴一起交给界面，别只留一句"意外退出"。
         if code != 0 {
-            let info = crash_info(&crash_dir, code);
+            let info = crash_info(&crash_dir, code, Some(crash_java), Some(crash_need));
+            // 把命中的规则写进日志：用户反馈"它说我是内存不够"时，能一眼看出
+            // 是哪条规则判的，而不是去猜。
+            unsafe {
+                cell.h().log_str(
+                    MIY_LOG_INFO,
+                    &format!(
+                        "崩溃分析：规则 {} → {}",
+                        if info.rule.is_empty() { "（未命中）" } else { info.rule },
+                        info.reason
+                    ),
+                );
+            }
             let crash = serde_json::to_vec(&json!({
                 "id": id_owned,
                 "code": code,
                 "ms": ms,
                 "reason": info.reason,
+                "advice": info.advice,
+                "rule": info.rule,
                 "log": info.log,
                 "crash": info.crash,
                 "dir": crash_dir,
@@ -6359,6 +6661,7 @@ unsafe fn dispatch_inner(
         "miy.mc.root.remove" => service_root_remove(&st.host, &req),
         "miy.mc.root.rename" => service_root_rename(&st.host, &req),
         "miy.mc.import" => service_import(&st.host, &req),
+        "miy.mc.modpack.install" => service_modpack_install(&st.host, &req),
         "miy.mc.remove" => service_remove(&st.host, &req),
         "miy.mc.rename" => service_rename(&st.host, &req),
         "miy.mc.info" => service_info(&st.host, &req),
@@ -6482,8 +6785,9 @@ mod crash_tests {
         )
         .unwrap();
         std::fs::write(dir.join("logs").join("latest.log"), "line1\nline2\n").unwrap();
-        let info = crash_info(dir.to_str().unwrap(), 1);
+        let info = crash_info(dir.to_str().unwrap(), 1, None, None);
         assert_eq!(info.reason, "Rendering overlay");
+        assert!(info.advice.is_empty());
         assert!(info.log.contains("line2"));
         assert!(info.crash.ends_with("crash-2026-11-04_12.00.00-client.txt"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -6492,9 +6796,32 @@ mod crash_tests {
     #[test]
     fn falls_back_when_no_report() {
         let dir = tmpdir("none");
-        let info = crash_info(dir.to_str().unwrap(), -1073741819);
+        let info = crash_info(dir.to_str().unwrap(), 1, None, None);
         assert!(info.reason.contains("退出代码"));
         assert!(info.crash.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rule_hits_through_crash_info() {
+        let dir = tmpdir("oom");
+        std::fs::write(
+            dir.join("crash-reports").join("crash-2026-11-09_10.00.00-client.txt"),
+            "---- Minecraft Crash Report ----\nDescription: Ticking entity\n\njava.lang.OutOfMemoryError: Java heap space\n",
+        )
+        .unwrap();
+        let info = crash_info(dir.to_str().unwrap(), 1, Some(25), Some(21));
+        assert_eq!(info.rule, "oom");
+        assert!(info.advice.contains("内存"), "{}", info.advice);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn access_violation_beats_exit_code_text() {
+        let dir = tmpdir("av");
+        let info = crash_info(dir.to_str().unwrap(), -1073741819, None, None);
+        assert_eq!(info.rule, "access_violation");
+        assert!(info.advice.contains("显卡驱动"), "{}", info.advice);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
