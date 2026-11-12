@@ -197,6 +197,26 @@
     padding:9px 18px 7px; font-size:11.5px; font-weight:600; color:var(--on-var);
     background:var(--low); border-bottom:1px solid #eef0f6; letter-spacing:.02em;
   }
+  /* 前置模组弹窗 */
+  .mask{position:fixed; inset:0; background:rgba(25,28,32,.32); display:flex;
+    align-items:center; justify-content:center; z-index:70; animation:fadeIn 120ms var(--ease-std)}
+  .sheet{width:min(520px, 90vw); max-height:82vh; overflow:auto; scrollbar-width:none;
+    background:var(--lowest); border-radius:18px; padding:20px 22px 16px;
+    box-shadow:0 18px 48px rgba(25,28,32,.24)}
+  .sheet::-webkit-scrollbar{width:0}
+  .sheet h3{margin:0 0 4px; font:600 16px/22px var(--font)}
+  .sheet .sub{color:var(--on-var); font-size:12.5px; line-height:19px; margin-bottom:14px}
+  .dep{display:flex; align-items:center; gap:10px; padding:9px 0; border-top:1px solid #eef0f6}
+  .dep .ic{width:34px; height:34px; border-radius:8px; flex:0 0 auto; background:var(--cont);
+    display:flex; align-items:center; justify-content:center; overflow:hidden;
+    font:600 13px var(--font); color:var(--on-var)}
+  .dep .ic img{width:100%; height:100%; object-fit:cover}
+  .dep .col{flex:1 1 auto; min-width:0}
+  .dep .t{font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .dep .s{color:var(--on-var); font-size:11.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .dep button{height:28px; padding:0 11px; font-size:12px; border-radius:14px; flex:0 0 auto}
+  .dep .ok{color:var(--ok); font-size:11.5px; flex:0 0 auto}
+  .sheet .acts{display:flex; gap:10px; justify-content:flex-end; margin-top:16px; flex-wrap:wrap}
   .pager{
     display:flex; align-items:center; justify-content:center; gap:6px; flex-wrap:wrap;
     padding:12px 0 4px; color:var(--on-var); font-size:12.5px;
@@ -633,6 +653,119 @@
     }
   }
 
+  /* ---- 前置模组 ---- */
+  // 装一个带 required 前置的模组时，先把前置列出来：可以跳过去看，也可以一起装。
+  async function installFlow(h, btn, v) {
+    const deps = (v && v.deps) || [];
+    const vid = (v && (v.id || v.vid)) || "";
+    if (!deps.length) return install(h, btn, vid);
+    let list = [];
+    try {
+      const r = await miy.call("miy.mc.deps",
+        { versions: deps.map(d => d.version).filter(Boolean) }, 30000);
+      list = (r && r.deps) || [];
+    } catch (e) { /* 查不到前置就直装，别挡路 */ }
+    if (!list.length) return install(h, btn, vid);
+    // 已经装过的前置标出来，省得重复下载。
+    let have = [];
+    try {
+      const t = customDir ? "" : curVersion;
+      if (t) {
+        const f = await miy.call("miy.mc.modfiles", { id: t }, 15000);
+        have = ((f && f.items) || []).map(x => x.file);
+      }
+    } catch (e) { /* 忽略 */ }
+    openDepSheet(h, v, list, have, btn);
+  }
+
+  function openDepSheet(h, v, deps, have, btn) {
+    const mask = document.createElement("div");
+    mask.className = "mask";
+    const sheet = document.createElement("div");
+    sheet.className = "sheet";
+    const t = document.createElement("h3");
+    t.textContent = "需要前置模组";
+    const sub = document.createElement("div");
+    sub.className = "sub";
+    sub.textContent = "「" + h.title + " " + (v.number || "") + "」要先装下面这些才能用。";
+    sheet.append(t, sub);
+
+    const pending = [];
+    for (const d of deps) {
+      const row = document.createElement("div");
+      row.className = "dep";
+      const ic = document.createElement("div");
+      ic.className = "ic";
+      if (d.icon) {
+        const img = document.createElement("img");
+        img.src = d.icon;
+        img.alt = "";
+        img.onerror = () => { img.remove(); ic.textContent = (d.title || "?").slice(0, 1).toUpperCase(); };
+        ic.append(img);
+      } else {
+        ic.textContent = (d.title || "?").slice(0, 1).toUpperCase();
+      }
+      const col = document.createElement("div");
+      col.className = "col";
+      const tt = document.createElement("div");
+      tt.className = "t";
+      tt.textContent = d.title || d.project;
+      const ss = document.createElement("div");
+      ss.className = "s";
+      ss.textContent = [d.number, kb(d.size)].filter(Boolean).join(" · ");
+      col.append(tt, ss);
+      row.append(ic, col);
+
+      if (have.includes(d.file)) {
+        const ok = document.createElement("span");
+        ok.className = "ok";
+        ok.textContent = "已安装";
+        row.append(ok);
+      } else {
+        pending.push(d);
+        const open = document.createElement("button");
+        open.textContent = "打开";
+        open.onclick = () => {
+          mask.remove();
+          openDetail({ id: d.project, title: d.title, icon: d.icon, slug: d.slug, desc: d.desc });
+        };
+        const one = document.createElement("button");
+        one.textContent = "安装";
+        one.onclick = async () => {
+          one.disabled = true;
+          one.textContent = "安装中";
+          await install({ id: d.project, title: d.title }, one, d.version);
+          one.textContent = "已安装";
+        };
+        row.append(open, one);
+      }
+      sheet.append(row);
+    }
+
+    const acts = document.createElement("div");
+    acts.className = "acts";
+    const skip = document.createElement("button");
+    skip.textContent = "只装本体";
+    skip.onclick = () => { mask.remove(); install(h, btn, v.id || v.vid); };
+    const all = document.createElement("button");
+    all.className = "primary";
+    all.textContent = pending.length ? "一起安装（" + pending.length + "）" : "继续安装";
+    all.onclick = async () => {
+      all.disabled = true;
+      for (const d of pending) {
+        all.textContent = "正在装 " + (d.title || d.project) + "…";
+        await install({ id: d.project, title: d.title }, null, d.version);
+      }
+      mask.remove();
+      install(h, btn, v.id || v.vid);
+    };
+    acts.append(skip, all);
+    sheet.append(acts);
+    mask.append(sheet);
+    mask.onclick = e => { if (e.target === mask) mask.remove(); };
+    document.body.append(mask);
+  }
+
   /* ---- 搜索与翻页 ---- */
   const PAGE = 20;
   let page = 1;
@@ -858,7 +991,8 @@
   async function openDetail(h) {
     cur = h;
     cur.facets = null;
-    dvMc = "";
+    // 从某个版本点进来时，默认就把版本筛选停在那一个 MC 版本上。
+    dvMc = mcVersion || "";
     dvLd = "";
     $("#list-view").style.display = "none";
     $("#detail").hidden = false;
@@ -950,9 +1084,17 @@
     const go = document.createElement("button");
     go.className = "go";
     go.textContent = "安装";
-    go.onclick = () => install(
-      { id: cur.id, title: cur.title, icon: cur.icon }, go, v.id || v.vid);
-    row.append(left, go);
+    go.onclick = () => installFlow(
+      { id: cur.id, title: cur.title, icon: cur.icon }, go, v);
+    row.append(left);
+    if ((v.deps || []).length) {
+      const need = document.createElement("span");
+      need.className = "chip p";
+      need.textContent = "需要 " + v.deps.length + " 个前置";
+      need.title = "安装时会列出前置模组";
+      row.append(need);
+    }
+    row.append(go);
     return row;
   }
 

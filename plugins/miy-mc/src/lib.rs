@@ -4956,10 +4956,13 @@ impl ZipOut {
         let method: u16 = 8;
         let offset = self.data.len() as u32;
         let name_b = name.as_bytes();
+        // 名字里有非 ASCII 就置 UTF-8 标志位（bit 11）。不置的话 Windows 资源管理器
+        // 会按本地代码页解码，中文世界名解压出来就是乱码。
+        let flags: u16 = if name_b.is_ascii() { 0 } else { 0x0800 };
         let mut local = Vec::new();
         local.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
         local.extend_from_slice(&20u16.to_le_bytes());
-        local.extend_from_slice(&0u16.to_le_bytes());
+        local.extend_from_slice(&flags.to_le_bytes());
         local.extend_from_slice(&method.to_le_bytes());
         local.extend_from_slice(&0u16.to_le_bytes());
         local.extend_from_slice(&0u16.to_le_bytes());
@@ -4976,7 +4979,7 @@ impl ZipOut {
         cen.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
         cen.extend_from_slice(&20u16.to_le_bytes());
         cen.extend_from_slice(&20u16.to_le_bytes());
-        cen.extend_from_slice(&0u16.to_le_bytes());
+        cen.extend_from_slice(&flags.to_le_bytes());
         cen.extend_from_slice(&method.to_le_bytes());
         cen.extend_from_slice(&0u16.to_le_bytes());
         cen.extend_from_slice(&0u16.to_le_bytes());
@@ -5050,12 +5053,40 @@ fn service_export_list(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
             })
             .collect()
     };
+    // 存档是「一个世界一个目录」，勾选单位是整个存档，不是里面的 level.dat。
+    let mut saves: Vec<Value> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(dir.join("saves")) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if !p.is_dir() {
+                continue;
+            }
+            let mut files = Vec::new();
+            walk_files(&p, &p, &mut files);
+            let size: u64 = files
+                .iter()
+                .filter_map(|(_, f)| std::fs::metadata(f).ok().map(|m| m.len()))
+                .sum();
+            saves.push(json!({
+                "file": e.file_name().to_string_lossy(),
+                "size": size,
+                "files": files.len(),
+            }));
+        }
+    }
+    saves.sort_by(|a, b| {
+        a["file"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["file"].as_str().unwrap_or(""))
+    });
     Ok(serde_json::to_vec(&json!({
         "ok": true,
         "id": id,
         "mods": list("mods"),
         "resourcepacks": list("resourcepacks"),
         "shaderpacks": list("shaderpacks"),
+        "saves": saves,
         "hasConfig": dir.join("config").is_dir(),
         "hasOptions": dir.join("options.txt").is_file(),
         "hasSaves": dir.join("saves").is_dir(),
@@ -5118,7 +5149,20 @@ fn service_export(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
     let want_sp = pick("shaderpacks");
     let want_config = req.get("config").and_then(Value::as_bool).unwrap_or(true);
     let want_options = req.get("options").and_then(Value::as_bool).unwrap_or(true);
-    let want_saves = req.get("saves").and_then(Value::as_bool).unwrap_or(false);
+    // 存档：数组 = 只导这几个世界，true = 全导，缺省 = 不导。
+    let (want_saves, saves_only) = match req.get("saves") {
+        Some(Value::Array(a)) => (
+            true,
+            Some(
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(|s| s.replace('\\', "/"))
+                    .collect::<Vec<String>>(),
+            ),
+        ),
+        Some(Value::Bool(b)) => (*b, None),
+        _ => (false, None),
+    };
 
     let (task, _cancel) = task_new("export", &format!("导出 {id}"), 1);
     let mut zip = ZipOut::new();
@@ -5161,7 +5205,32 @@ fn service_export(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
         }
     }
     if want_saves {
-        export_dir(&mut zip, &dir, "saves", None, &mut count)?;
+        let base = dir.join("saves");
+        let mut worlds: Vec<String> = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(&base) {
+            for e in rd.flatten() {
+                if e.path().is_dir() {
+                    worlds.push(e.file_name().to_string_lossy().to_string());
+                }
+            }
+        }
+        worlds.sort();
+        for w in worlds {
+            if let Some(sel) = &saves_only {
+                if !sel.iter().any(|s| s == &w) {
+                    continue;
+                }
+            }
+            let wdir = base.join(&w);
+            let mut files = Vec::new();
+            walk_files(&wdir, &wdir, &mut files);
+            files.sort_by_key(|(rel, _)| rel.clone());
+            for (rel, path) in files {
+                let Ok(bytes) = std::fs::read(&path) else { continue };
+                zip.add(&format!("saves/{w}/{rel}"), &bytes)?;
+                count += 1;
+            }
+        }
     }
 
     let info = service_verinfo(h, req).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
@@ -6950,7 +7019,21 @@ fn service_mod_versions(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
 
     // 版本列表动辄几百条、几百 KB：MCIM 传大包要十几秒，自建中转有缓存（热命中几十毫秒），
     // 官方源居中。并行发、谁先回用谁，别让最慢的那个拖住整个详情页。
-    let v = fetch_json_race(h, &url)?;
+    let mut v = fetch_json_race(h, &url)?;
+    // 自建中转把版本对象裁成了精简版（没有 dependencies），前置模组就全丢了。
+    // 整份都没有这个字段时回官方源再要一次 —— 慢一点，但前置信息是对的。
+    let lossy = v
+        .as_array()
+        .map(|a| !a.is_empty() && a.iter().all(|x| x.get("dependencies").is_none()))
+        .unwrap_or(false);
+    if lossy {
+        let official = direct_of(&url);
+        if official != url {
+            if let Ok(v2) = fetch_json_once(h, &official) {
+                v = v2;
+            }
+        }
+    }
     let mut list: Vec<Value> = v
         .as_array()
         .map(|a| {
@@ -6973,6 +7056,30 @@ fn service_mod_versions(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
                             })
                             .unwrap_or_default()
                     };
+                    // 前置模组：只留 required（optional / incompatible / embedded 不提示）。
+                    // 详情页据此在安装前弹一张「需要前置」的清单。
+                    let deps: Vec<Value> = ver
+                        .get("dependencies")
+                        .and_then(Value::as_array)
+                        .map(|a| {
+                            a.iter()
+                                .filter(|d| {
+                                    d.get("dependency_type").and_then(Value::as_str)
+                                        == Some("required")
+                                })
+                                .filter_map(|d| {
+                                    let project =
+                                        d.get("project_id").and_then(Value::as_str).unwrap_or("");
+                                    let version =
+                                        d.get("version_id").and_then(Value::as_str).unwrap_or("");
+                                    if project.is_empty() && version.is_empty() {
+                                        return None;
+                                    }
+                                    Some(json!({ "project": project, "version": version }))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     Some(json!({
                         "id": ver.get("id").and_then(Value::as_str)?,
                         "name": ver.get("name").and_then(Value::as_str).unwrap_or(""),
@@ -6983,6 +7090,7 @@ fn service_mod_versions(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
                         "downloads": ver.get("downloads").and_then(Value::as_u64).unwrap_or(0),
                         "file": file.get("filename").and_then(Value::as_str).unwrap_or(""),
                         "size": file.get("size").and_then(Value::as_u64).unwrap_or(0),
+                        "deps": deps,
                     }))
                 })
                 .collect()
@@ -7061,6 +7169,81 @@ fn service_mod_versions(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
     Ok(body)
 }
 
+/// 前置模组的详情：给一批 Modrinth 版本 id，返回它们属于哪个项目、叫什么、装哪个文件。
+///
+/// 详情页点「安装」时如果这一版有 required 前置，就先问这里，弹一张清单让用户
+/// 一起装或跳过去看 —— 和 PCL2 的「缺少前置」提示一个意思。
+fn service_deps(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
+    let modrinth = modrinth_base();
+    let ids: Vec<String> = req
+        .get("versions")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    if ids.is_empty() {
+        return Ok(serde_json::to_vec(&json!({ "ok": true, "deps": [] })).unwrap_or_default());
+    }
+    let ids_json = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into());
+    let vers = fetch_json_race(h, &format!("{modrinth}/versions?ids={}", enc(&ids_json)))
+        .unwrap_or(Value::Array(Vec::new()));
+    let arr = vers.as_array().cloned().unwrap_or_default();
+
+    // 项目信息（标题 / 图标 / slug）一次批量取，别一个前置发一次请求。
+    let mut pids: Vec<String> = arr
+        .iter()
+        .filter_map(|v| {
+            v.get("project_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect();
+    pids.sort();
+    pids.dedup();
+    let mut projects: HashMap<String, Value> = HashMap::new();
+    if !pids.is_empty() {
+        let pj = serde_json::to_string(&pids).unwrap_or_else(|_| "[]".into());
+        if let Ok(v) = fetch_json_race(h, &format!("{modrinth}/projects?ids={}", enc(&pj))) {
+            for p in v.as_array().cloned().unwrap_or_default() {
+                if let Some(id) = p.get("id").and_then(Value::as_str) {
+                    projects.insert(id.to_string(), p);
+                }
+            }
+        }
+    }
+
+    let deps: Vec<Value> = arr
+        .iter()
+        .map(|v| {
+            let pid = v.get("project_id").and_then(Value::as_str).unwrap_or("");
+            let p = projects.get(pid);
+            let file = v.get("files").and_then(Value::as_array).and_then(|f| {
+                f.iter()
+                    .find(|x| x.get("primary").and_then(Value::as_bool).unwrap_or(false))
+                    .or_else(|| f.first())
+            });
+            let s = |k: &str| p.and_then(|p| p.get(k)).and_then(Value::as_str).unwrap_or("");
+            json!({
+                "version": v.get("id").and_then(Value::as_str).unwrap_or(""),
+                "project": pid,
+                "number": v.get("version_number").and_then(Value::as_str).unwrap_or(""),
+                "title": if s("title").is_empty() { pid } else { s("title") },
+                "slug": s("slug"),
+                "icon": s("icon_url"),
+                "desc": s("description"),
+                "file": file.and_then(|f| f.get("filename")).and_then(Value::as_str).unwrap_or(""),
+                "size": file.and_then(|f| f.get("size")).and_then(Value::as_u64).unwrap_or(0),
+            })
+        })
+        .collect();
+    Ok(serde_json::to_vec(&json!({ "ok": true, "deps": deps })).unwrap_or_default())
+}
+
 /// 版本号比较：`26.3` 要排在 `1.21.5` 前面，不能按字符串比。
 fn ver_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     fn key(s: &str) -> Vec<i64> {
@@ -7136,6 +7319,7 @@ unsafe fn dispatch_inner(
         }
         "miy.mc.mod" => service_mod_detail(&st.host, &req),
         "miy.mc.mod.versions" => service_mod_versions(&st.host, &req),
+        "miy.mc.deps" => service_deps(&st.host, &req),
         "miy.mc.mod.install" => service_mods_install(&st.host, &req),
         "miy.mc.modfiles" => service_mod_files(&st.host, &req),
         "miy.mc.modtoggle" => service_mod_toggle(&st.host, &req),

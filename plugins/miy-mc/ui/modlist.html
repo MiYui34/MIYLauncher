@@ -110,6 +110,7 @@
 <div class="bar">
   <input type="text" id="q" placeholder="搜索模组" spellcheck="false">
   <span class="count" id="count"></span>
+  <button id="dlmods">下载模组</button>
   <button id="refresh">刷新</button>
 </div>
 
@@ -213,6 +214,32 @@
         }
       };
       row.append(btn);
+      // 删除就放在禁用旁边：删一个模组不该先点开详情。
+      const del = document.createElement("button");
+      del.className = "danger";
+      del.textContent = "删除";
+      let armed = 0;
+      del.onclick = async e => {
+        e.stopPropagation();
+        if (!armed) {
+          armed = setTimeout(() => { armed = 0; del.textContent = "删除"; }, 3000);
+          del.textContent = "再点一次";
+          return;
+        }
+        clearTimeout(armed);
+        armed = 0;
+        del.disabled = true;
+        try {
+          await miy.call("miy.mc.modremove", { id: name, file: m.file }, 15000);
+          await loadFiles();
+          log("已删除 " + titleOf(m) + "。", "on");
+        } catch (err) {
+          del.disabled = false;
+          del.textContent = "删除";
+          log("删除失败，请确认游戏没有在运行。", "bad");
+        }
+      };
+      row.append(del);
       row.onclick = () => openSheet(m);
       return row;
     }));
@@ -381,6 +408,8 @@
   }
 
   $("#back").onclick = () => miy.goto("page:miy.mc/detail?name=" + encodeURIComponent(name));
+  // 带着版本名跳过去：模组页会把这个版本设成安装目标，并按它的 MC 版本筛选。
+  $("#dlmods").onclick = () => miy.goto("page:miy.mc/mods?name=" + encodeURIComponent(name));
   $("#q").addEventListener("input", render);
   $("#refresh").onclick = async () => {
     const b = $("#refresh");

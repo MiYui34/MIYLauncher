@@ -305,12 +305,8 @@
   <div class="card">
     <div class="row">
       <span class="k">包含内容</span>
-      <label class="check"><input type="checkbox" id="exMods" checked> 模组</label>
-      <label class="check"><input type="checkbox" id="exPacks" checked> 资源包</label>
-      <label class="check"><input type="checkbox" id="exShaders" checked> 光影</label>
       <label class="check"><input type="checkbox" id="exConfig" checked> 配置</label>
       <label class="check"><input type="checkbox" id="exOptions" checked> 游戏设置</label>
-      <label class="check"><input type="checkbox" id="exSaves"> 存档</label>
     </div>
     <div class="row">
       <span class="k">导出位置</span>
@@ -800,7 +796,10 @@
     n.textContent = title + "（" + items.length + "）";
     const all = document.createElement("button");
     all.type = "button";
-    all.textContent = "全选";
+    // 默认全部勾上，所以按钮一开始就该是「全不选」——以前写死「全选」，
+    // 点一下反而把已经勾上的全取消了。
+    all.textContent = items.length ? "全不选" : "全选";
+    all.disabled = !items.length;
     all.onclick = () => {
       const boxes = [...document.querySelectorAll('#exlist input[data-kind="' + kind + '"]')];
       const on = boxes.some(b => !b.checked);
@@ -809,6 +808,17 @@
     };
     head.append(n, all);
     frag.append(head);
+    if (!items.length) {
+      const row = document.createElement("div");
+      row.className = "exrow";
+      const f = document.createElement("span");
+      f.className = "f";
+      f.style.color = "var(--on-var)";
+      f.textContent = "（空）";
+      row.append(f);
+      frag.append(row);
+      return frag;
+    }
     for (const it of items) {
       const row = document.createElement("label");
       row.className = "exrow";
@@ -834,17 +844,18 @@
     const box = $("#exlist");
     box.replaceChildren();
     if (!exData) { $("#expickhint").textContent = "读取失败"; return; }
+    // 四组都画出来：没有内容也显示「（空）」，用户才知道是没东西可导，
+    // 而不是以为这里只支持模组。
     const groups = [
       ["模组", "mods", exData.mods || []],
       ["资源包", "resourcepacks", exData.resourcepacks || []],
       ["光影", "shaderpacks", exData.shaderpacks || []],
-    ].filter(g => g[2].length);
-    if (!groups.length) {
-      $("#expickhint").textContent = "这个版本还没有可导出的模组、资源包或光影。";
-      return;
-    }
+      ["存档", "saves", exData.saves || []],
+    ];
     const total = groups.reduce((a, g) => a + g[2].length, 0);
-    $("#expickhint").textContent = "共 " + total + " 个文件，取消勾选即可排除。";
+    $("#expickhint").textContent = total
+      ? "共 " + total + " 项，取消勾选即可排除。"
+      : "这个版本还没有可导出的模组、资源包、光影或存档。";
     const frag = document.createDocumentFragment();
     for (const [title, kind, items] of groups) frag.append(exGroup(title, kind, items));
     box.append(frag);
@@ -878,13 +889,13 @@
         id: name,
         config: $("#exConfig").checked,
         options: $("#exOptions").checked,
-        saves: $("#exSaves").checked,
       };
       // 清单没读到时不要传空数组（那等于「一个都不导」），交给后端全导。
       if (exData) {
-        req.mods = $("#exMods").checked ? exPick("mods") : [];
-        req.resourcepacks = $("#exPacks").checked ? exPick("resourcepacks") : [];
-        req.shaderpacks = $("#exShaders").checked ? exPick("shaderpacks") : [];
+        req.mods = exPick("mods");
+        req.resourcepacks = exPick("resourcepacks");
+        req.shaderpacks = exPick("shaderpacks");
+        req.saves = exPick("saves");
       }
       const r = await miy.call("miy.mc.export", req, 600000);
       if (r && r.ok) {
