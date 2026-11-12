@@ -563,6 +563,32 @@ fn fetch_json(h: &MiyHostV1, url: &str) -> Result<Value, String> {
     Err(last)
 }
 
+/// 取纯文本（`maven-metadata.xml` 这类不是 JSON 的响应）。
+fn fetch_text(h: &MiyHostV1, url: &str) -> Result<String, String> {
+    let resp = call_json(
+        h,
+        "miy.net.get",
+        &json!({
+            "url": url,
+            "timeout_ms": 30_000u64,
+            "max_bytes": 8_388_608u64,
+        }),
+    )?;
+    if resp.get("ok").and_then(Value::as_bool) != Some(true) {
+        let status = resp.get("status").and_then(Value::as_u64).unwrap_or(0);
+        let err = resp
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("网络请求失败");
+        return Err(format!("{err}（HTTP {status}）"));
+    }
+    Ok(resp
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string())
+}
+
 /// 正在竞速的请求数：慢的那个线程还要跑好几秒，别无限堆。
 static RACING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 const RACE_MAX: usize = 6;
@@ -1175,6 +1201,7 @@ fn allows(rules: Option<&Value>) -> bool {
     allow
 }
 
+#[derive(Clone)]
 pub(crate) struct Item {
     pub(crate) path: String,
     pub(crate) url: String,
@@ -2667,7 +2694,7 @@ fn loaders_cache_file(h: &MiyHostV1, mc: &str) -> Option<std::path::PathBuf> {
     Some(
         std::path::Path::new(data)
             .join("cache")
-            .join(format!("loaders-{safe}.json")),
+            .join(format!("loaders-v2-{safe}.json")),
     )
 }
 
@@ -2702,6 +2729,81 @@ fn loader_meta(h: &MiyHostV1, kind: &str, official: &str, mc: &str) -> Option<Ve
     None
 }
 
+/// 从 `maven-metadata.xml` 里抠出所有 `<version>`（maven 按升序排）。
+fn maven_versions(h: &MiyHostV1, urls: &[String]) -> Option<Vec<String>> {
+    for u in urls {
+        let Ok(text) = fetch_text(h, u) else { continue };
+        let mut out = Vec::new();
+        let mut rest = text.as_str();
+        while let Some(i) = rest.find("<version>") {
+            let after = &rest[i + "<version>".len()..];
+            let Some(j) = after.find("</version>") else { break };
+            let v = after[..j].trim();
+            if !v.is_empty() {
+                out.push(v.to_string());
+            }
+            rest = &after[j + "</version>".len()..];
+        }
+        if !out.is_empty() {
+            return Some(out);
+        }
+    }
+    None
+}
+
+/// Forge 的版本号是 `<mc>-<forge>`，例如 `26.3-66.1.5`。
+fn forge_meta(h: &MiyHostV1, mc: &str) -> Option<Vec<Value>> {
+    let urls = vec![
+        format!("{}/maven/net/minecraftforge/forge/maven-metadata.xml", mirror_base()),
+        "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml".to_string(),
+    ];
+    let all = maven_versions(h, &urls)?;
+    let prefix = format!("{mc}-");
+    let mut list: Vec<Value> = all
+        .iter()
+        .filter_map(|v| v.strip_prefix(prefix.as_str()))
+        .map(|v| json!({"version": v, "stable": true}))
+        .collect();
+    // maven 是升序，界面上新的要排前面。
+    list.reverse();
+    if list.is_empty() {
+        None
+    } else {
+        Some(list)
+    }
+}
+
+/// NeoForge 的版本号跟着 MC 版本走：`26.1.2` → `26.1.2.125`；
+/// 老版本是 `1.21.1` → `21.1.80`（去掉开头的 `1.`）。
+fn neoforge_meta(h: &MiyHostV1, mc: &str) -> Option<Vec<Value>> {
+    let urls = vec![
+        format!("{}/maven/net/neoforged/neoforge/maven-metadata.xml", mirror_base()),
+        "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml".to_string(),
+    ];
+    let all = maven_versions(h, &urls)?;
+    let mut prefixes = vec![format!("{mc}.")];
+    if let Some(rest) = mc.strip_prefix("1.") {
+        prefixes.push(format!("{rest}."));
+    }
+    let mut list: Vec<Value> = Vec::new();
+    for p in &prefixes {
+        list = all
+            .iter()
+            .filter(|v| v.starts_with(p.as_str()))
+            .map(|v| json!({"version": v, "stable": true}))
+            .collect();
+        if !list.is_empty() {
+            break;
+        }
+    }
+    list.reverse();
+    if list.is_empty() {
+        None
+    } else {
+        Some(list)
+    }
+}
+
 fn service_loaders(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
     let mc = field(req, "mc").ok_or("缺 mc")?;
     // 加载器列表一天也不会变：内存缓存 10 分钟 + 磁盘缓存（跨重启）。
@@ -2729,15 +2831,23 @@ fn service_loaders(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
         }
     }
 
-    // Fabric 与 Quilt 并行拉：串行时两个 4 秒叠起来就是 8 秒。
+    // 四个源并行拉：串行时每个 4 秒叠起来就是十几秒。
     let cell = HostCell(*h);
     let mc1 = mc.to_string();
     let t1 = std::thread::spawn(move || loader_meta(cell.h(), "fabric-meta", FABRIC_META, &mc1));
     let cell2 = HostCell(*h);
     let mc2 = mc.to_string();
     let t2 = std::thread::spawn(move || loader_meta(cell2.h(), "quilt-meta", QUILT_META, &mc2));
+    let cell3 = HostCell(*h);
+    let mc3 = mc.to_string();
+    let t3 = std::thread::spawn(move || forge_meta(cell3.h(), &mc3));
+    let cell4 = HostCell(*h);
+    let mc4 = mc.to_string();
+    let t4 = std::thread::spawn(move || neoforge_meta(cell4.h(), &mc4));
     let fabric = t1.join().ok().flatten();
     let quilt = t2.join().ok().flatten();
+    let forge = t3.join().ok().flatten();
+    let neoforge = t4.join().ok().flatten();
 
     let mut out = Vec::new();
     if let Some(list) = fabric {
@@ -2745,6 +2855,12 @@ fn service_loaders(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
     }
     if let Some(list) = quilt {
         out.push(json!({"id":"quilt","name":"Quilt","versions":list}));
+    }
+    if let Some(list) = forge {
+        out.push(json!({"id":"forge","name":"Forge","versions":list}));
+    }
+    if let Some(list) = neoforge {
+        out.push(json!({"id":"neoforge","name":"NeoForge","versions":list}));
     }
     let body = json!({"ok": true, "mc": mc, "loaders": out});
     if let Ok(mut g) = CACHE.lock() {
@@ -2818,6 +2934,324 @@ fn service_loader_install(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String>
     Ok(serde_json::to_vec(&json!({
         "ok": true, "name": name, "dir": dir, "loader": loader, "loaderVersion": lv,
         "fabricApi": fabric_api, "fabricApiError": fabric_api_error,
+    }))
+    .unwrap_or_default())
+}
+
+/// 跑加载器官方安装器（Forge / NeoForge），带超时与取消。
+///
+/// 这两个加载器不是「一份 profile JSON」就能装好的：它们要拿原版 jar 做二进制
+/// 补丁、生成 client-extra、再跑一串 processor。官方 installer 把这些都做完了，
+/// 自己实现等于重写一遍 Forge 的安装器，所以这里直接调它。
+fn run_installer(
+    java: &str,
+    jar: &str,
+    root: &str,
+    cancel: &Arc<AtomicBool>,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    use std::io::Read;
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let mut child = Command::new(java)
+        .arg("-jar")
+        .arg(jar)
+        .arg("--installClient")
+        .arg(root)
+        .current_dir(root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map_err(|e| format!("启动安装器失败：{e}"))?;
+
+    let mut out_pipe = child.stdout.take();
+    let mut err_pipe = child.stderr.take();
+    let out_buf = Arc::new(Mutex::new(String::new()));
+    let err_buf = Arc::new(Mutex::new(String::new()));
+    let o = out_buf.clone();
+    let t_out = std::thread::spawn(move || {
+        if let Some(p) = out_pipe.as_mut() {
+            let mut s = String::new();
+            let _ = p.read_to_string(&mut s);
+            if let Ok(mut g) = o.lock() {
+                g.push_str(&s);
+            }
+        }
+    });
+    let e = err_buf.clone();
+    let t_err = std::thread::spawn(move || {
+        if let Some(p) = err_pipe.as_mut() {
+            let mut s = String::new();
+            let _ = p.read_to_string(&mut s);
+            if let Ok(mut g) = e.lock() {
+                g.push_str(&s);
+            }
+        }
+    });
+
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let _ = t_out.join();
+                let _ = t_err.join();
+                let out = out_buf.lock().map(|g| g.clone()).unwrap_or_default();
+                let err = err_buf.lock().map(|g| g.clone()).unwrap_or_default();
+                if status.success() {
+                    return Ok(out);
+                }
+                // 安装器的报错通常只有最后几行有用，前面全是下载进度。
+                let src = if err.trim().is_empty() { &out } else { &err };
+                let tail: Vec<&str> = src.lines().rev().take(6).collect();
+                let tail: Vec<&str> = tail.into_iter().rev().collect();
+                return Err(format!(
+                    "安装器退出码 {:?}：{}",
+                    status.code(),
+                    tail.join(" / ")
+                ));
+            }
+            Ok(None) => {}
+            Err(e) => return Err(format!("等待安装器失败：{e}")),
+        }
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("已取消".to_string());
+        }
+        if started.elapsed() > timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("安装器超时（15 分钟）".to_string());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
+/// 把安装器要用的库先铺进 `<root>/libraries`。
+///
+/// 安装器只会从它自己的 maven 拉库，而 `maven.neoforged.net` 在国内经常连不上
+/// （实测直接超时）。安装器发现文件已经在 `libraries` 里就会跳过下载，
+/// 所以我们先用镜像铺一遍，再让它跑。
+fn seed_installer_libs(
+    h: &MiyHostV1,
+    root: &str,
+    jar: &str,
+    task: u64,
+    cancel: &Arc<AtomicBool>,
+) -> Result<usize, String> {
+    let bytes = std::fs::read(jar).map_err(|e| format!("读安装器失败：{e}"))?;
+    let entries = zip_list(&bytes)?;
+    let mut items: Vec<Item> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for name in ["version.json", "install_profile.json"] {
+        let Some(e) = entries.iter().find(|e| e.name == name) else {
+            continue;
+        };
+        let Ok(raw) = zip_read(&bytes, e) else { continue };
+        let Ok(v) = serde_json::from_slice::<Value>(&raw) else {
+            continue;
+        };
+        let Some(libs) = v.get("libraries").and_then(Value::as_array) else {
+            continue;
+        };
+        for l in libs {
+            let art = l.get("downloads").and_then(|d| d.get("artifact"));
+            let path = art
+                .and_then(|a| a.get("path"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| l.get("name").and_then(Value::as_str).and_then(maven_rel));
+            let Some(path) = path else { continue };
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            let sha1 = art
+                .and_then(|a| a.get("sha1"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let size = art
+                .and_then(|a| a.get("size"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            items.push(Item {
+                path: format!("libraries/{path}"),
+                url: format!("{}/maven/{path}", mirror_base()),
+                size,
+                sha1,
+            });
+        }
+    }
+    if items.is_empty() {
+        return Ok(0);
+    }
+    let n = items.len();
+    let got = fetch_all(h, root, &items, concurrency(h), 0, Some(task), Some(cancel));
+    if got.cancelled {
+        return Err("已取消".to_string());
+    }
+    // 并发下漏掉的文件（限流、超时）串行补一遍：再并发只会继续撞限流。
+    let missing: Vec<Item> = items
+        .iter()
+        .filter(|it| !std::path::Path::new(&format!("{root}/{}", it.path)).is_file())
+        .cloned()
+        .collect();
+    if !missing.is_empty() {
+        let again = fetch_all(h, root, &missing, 1, 0, Some(task), Some(cancel));
+        if again.cancelled {
+            return Err("已取消".to_string());
+        }
+    }
+    let left = items
+        .iter()
+        .filter(|it| !std::path::Path::new(&format!("{root}/{}", it.path)).is_file())
+        .count();
+    if left > 0 {
+        return Err(format!("还有 {left} 个安装器依赖没下下来"));
+    }
+    Ok(n)
+}
+
+/// 装 Forge / NeoForge：先保证原版在，再跑官方安装器。
+fn service_install_forge(
+    h: &MiyHostV1,
+    req: &Value,
+    mc: &str,
+    loader: &str,
+    ver: &str,
+) -> Result<Vec<u8>, String> {
+    let root = game_root(h, req);
+    let base_json = format!("{root}\\versions\\{mc}\\{mc}.json");
+    let base_jar = format!("{root}\\versions\\{mc}\\{mc}.jar");
+    let mut notes: Vec<String> = Vec::new();
+    if !std::path::Path::new(&base_json).is_file() || !std::path::Path::new(&base_jar).is_file() {
+        // 安装器要读原版的 json 和客户端 jar 来做补丁，缺一个都装不了。
+        let mut r = req.clone();
+        if let Some(o) = r.as_object_mut() {
+            o.insert("loader".into(), json!(""));
+            o.insert("loaderVersion".into(), json!(""));
+            o.insert("name".into(), json!(mc));
+        }
+        service_install(h, &r)?;
+        notes.push(format!("先装好了原版 {mc}"));
+    }
+
+    let (file, url) = if loader == "forge" {
+        (
+            format!("forge-{mc}-{ver}-installer.jar"),
+            format!(
+                "{}/maven/net/minecraftforge/forge/{mc}-{ver}/forge-{mc}-{ver}-installer.jar",
+                mirror_base()
+            ),
+        )
+    } else {
+        (
+            format!("neoforge-{ver}-installer.jar"),
+            format!(
+                "{}/maven/net/neoforged/neoforge/{ver}/neoforge-{ver}-installer.jar",
+                mirror_base()
+            ),
+        )
+    };
+    let cache = format!("{root}\\cache\\installers");
+    std::fs::create_dir_all(&cache).map_err(|e| format!("创建缓存目录失败：{e}"))?;
+    let jar = format!("{cache}\\{file}");
+    let (task, cancel) = task_new("install", &format!("安装 {loader} {ver}"), 3);
+    if !std::path::Path::new(&jar).is_file() {
+        unsafe { h.log_str(MIY_LOG_INFO, &format!("正在下载 {loader} 安装器…")) };
+        if let Err(e) = download(h, &url, &jar, 0) {
+            task_finish(task, false, &e);
+            return Err(format!("下载安装器失败：{e}"));
+        }
+    }
+    task_progress(task, 1, 0);
+
+    // 安装器自己的 maven 在国内经常连不上，先用镜像把库铺好。
+    match seed_installer_libs(h, &root, &jar, task, &cancel) {
+        Ok(n) if n > 0 => unsafe {
+            h.log_str(
+                MIY_LOG_INFO,
+                &format!("已用镜像铺好 {n} 个安装器依赖"),
+            )
+        },
+        Ok(_) => {}
+        Err(e) if e == "已取消" => {
+            task_cancelled(task, "已取消");
+            return Ok(
+                serde_json::to_vec(&json!({"ok": false, "cancelled": true})).unwrap_or_default(),
+            );
+        }
+        Err(e) => unsafe {
+            h.log_str(
+                MIY_LOG_WARN,
+                &format!("预铺安装器依赖失败（继续尝试）：{e}"),
+            )
+        },
+    }
+
+    // 安装器要求根目录里有 launcher_profiles.json，否则直接报错退出。
+    let profiles = format!("{root}\\launcher_profiles.json");
+    if !std::path::Path::new(&profiles).is_file() {
+        let _ = std::fs::write(&profiles, br#"{"profiles":{},"settings":{},"version":3}"#);
+    }
+
+    let man = manifest_for(h, mc);
+    let v = resolve(h, &man, mc, 0)?;
+    let (need, comp) = java::required(&v, mc);
+    let j = match java::ensure(h, need, comp.as_deref(), true, &mut notes) {
+        Ok(j) => j,
+        Err(e) => {
+            task_finish(task, false, &e);
+            return Err(e);
+        }
+    };
+    unsafe { h.log_str(MIY_LOG_INFO, &format!("正在运行 {loader} 安装器（Java {}）…", j.major)) };
+    let out = match run_installer(
+        &j.path,
+        &jar,
+        &root,
+        &cancel,
+        std::time::Duration::from_secs(900),
+    ) {
+        Ok(o) => o,
+        Err(e) => {
+            if e == "已取消" {
+                task_cancelled(task, "已取消");
+                return Ok(
+                    serde_json::to_vec(&json!({"ok": false, "cancelled": true})).unwrap_or_default(),
+                );
+            }
+            task_finish(task, false, &e);
+            return Err(e);
+        }
+    };
+    task_progress(task, 2, 0);
+
+    let name = if loader == "forge" {
+        format!("{mc}-forge-{ver}")
+    } else {
+        format!("neoforge-{ver}")
+    };
+    let dir = format!("{root}\\versions\\{name}");
+    let json_path = format!("{dir}\\{name}.json");
+    if !std::path::Path::new(&json_path).is_file() {
+        let tail: Vec<&str> = out.lines().rev().take(3).collect();
+        let tail: Vec<&str> = tail.into_iter().rev().collect();
+        let msg = format!(
+            "安装器跑完了，但没找到 {json_path}。安装器输出：{}",
+            tail.join(" / ")
+        );
+        task_finish(task, false, &msg);
+        return Err(msg);
+    }
+    task_progress(task, 3, 0);
+    task_finish(task, true, "");
+    Ok(serde_json::to_vec(&json!({
+        "ok": true, "id": name, "name": name, "dir": dir, "root": root,
+        "loader": loader, "loaderVersion": ver, "files": 0, "bytes": 0,
+        "notes": notes,
     }))
     .unwrap_or_default())
 }
@@ -2938,6 +3372,11 @@ fn service_install(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
     let loader = field(req, "loader").unwrap_or("").to_string();
     let loader_ver = field(req, "loaderVersion").unwrap_or("").to_string();
     let merged = !loader.is_empty() && !loader_ver.is_empty();
+    // Forge / NeoForge 没有「一份 profile JSON」可合并：它们要跑官方安装器
+    // 给原版 jar 打补丁，所以走另一条路（目录名也由安装器决定）。
+    if merged && (loader == "forge" || loader == "neoforge") {
+        return service_install_forge(h, req, id, &loader, &loader_ver);
+    }
     // 版本目录名：默认就是版本 id（带加载器时是 `26.1.2-fabric`）。目录名即用户看到的名字。
     let name = field(req, "name")
         .map(str::to_string)

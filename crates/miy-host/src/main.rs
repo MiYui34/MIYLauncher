@@ -514,7 +514,8 @@ fn call_probe(service: &str) -> i32 {
     let mut last: Vec<u8> = Vec::new();
     for i in 0..repeat {
         let started = Instant::now();
-        let out = bus::get().call(service, body.as_bytes(), Duration::from_secs(120));
+        // 装原版 / 跑 Forge 安装器都是分钟级，探针别用 120 秒卡死自己。
+        let out = bus::get().call(service, body.as_bytes(), Duration::from_secs(900));
         match out {
             Ok(v) => {
                 println!(

@@ -510,12 +510,22 @@
   }
 
   // 版本名跟着加载器变：`26.1.2` → `26.1.2-fabric`。
+  // Forge / NeoForge 的目录名由官方安装器决定（`26.3-forge-66.1.5`、`neoforge-26.3.0.102`），
+  // 这里先按同样的规则显示，装完以插件返回的 id 为准。
+  function loaderName() {
+    if (!target) return "";
+    if (!loaderPick || !loaderVer) return target.id;
+    if (loaderPick === "forge") return target.id + "-forge-" + loaderVer;
+    if (loaderPick === "neoforge") return "neoforge-" + loaderVer;
+    return target.id + "-" + loaderPick;
+  }
+
   // 用户自己改过名字（已经不等于版本号）就不再动它。
   function syncName() {
     if (!target) return;
     const cur = ($("#shname").value || "").trim();
     if (cur && cur !== target.id) return;
-    $("#shname").value = (loaderPick && loaderVer) ? target.id + "-" + loaderPick : target.id;
+    $("#shname").value = loaderName();
   }
 
   function fillLoaderVer() {
@@ -580,7 +590,7 @@
     const typed = ($("#shname").value || "").trim();
     const withLoader = Boolean(loaderPick && loaderVer);
     const custom = typed && typed !== target.id;
-    const name = custom ? typed : (withLoader ? target.id + "-" + loaderPick : target.id);
+    const name = custom ? typed : loaderName();
     const where = ($("#shroot").value || "").trim();
     busy = true;
     $("#shgo").disabled = true;
@@ -607,6 +617,8 @@
       }
       const r = await miy.call("miy.mc.install", req, 3600000);
       if (r && r.ok) {
+        // Forge / NeoForge 的目录名由安装器决定，以插件返回的 id 为准。
+        const done = (r && r.id) || name;
         let loaderNote = "";
         if (withLoader) {
           loaderNote = "，已装上 " + loaderPick + " " + loaderVer;
@@ -618,7 +630,7 @@
         $("#shbar").style.width = "100%";
         $("#shprog").textContent = "已完成，" + Math.round((r.bytes || 0) / 1048576) + " MB，"
           + (r.files || 0) + " 个文件" + loaderNote;
-        log(name + " 已安装完成" + loaderNote + "，可在首页启动。", "on");
+        log(done + " 已安装完成" + loaderNote + "，可在首页启动。", "on");
         busy = false;
         $("#shgo").textContent = "完成";
         $("#shstop").hidden = true;
