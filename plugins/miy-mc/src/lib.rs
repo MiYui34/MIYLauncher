@@ -752,12 +752,15 @@ pub(crate) fn download_any(
 /// 键是 `id|mc|loader`，最多留 24 条，5 分钟过期。
 static MODVER_CACHE: Mutex<Vec<(String, std::time::Instant, Vec<u8>)>> = Mutex::new(Vec::new());
 
-/// 版本清单缓存：拉一次能用十分钟，版本页打开就不用再等网络。
+/// 版本清单缓存：拉一次能用两分钟。
+///
+/// 以前是十分钟，快照版一天能出好几个，用户经常遇到「官方已经 snapshot-8 了，
+/// 启动器还停在 7」。清单只有 278 KB，两分钟一次不算负担。
 static MAN_CACHE: Mutex<Option<(std::time::Instant, Value)>> = Mutex::new(None);
 /// 正在拉清单的标记：别的线程别重复拉，等它拉完直接用。
 static MAN_BUSY: Mutex<bool> = Mutex::new(false);
 static MAN_DONE: Condvar = Condvar::new();
-const MAN_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+const MAN_TTL: std::time::Duration = std::time::Duration::from_secs(120);
 
 fn man_cached() -> Option<Value> {
     let g = MAN_CACHE.lock().ok()?;
@@ -901,11 +904,17 @@ fn warm_manifest(h: &MiyHostV1) {
     let raw = Box::into_raw(Box::new(*h)) as usize;
     std::thread::spawn(move || {
         let host = unsafe { &*(raw as *const MiyHostV1) };
-        // 先用上次落盘的清单把界面点亮，再去后台换新的。
+        // 先用上次落盘的清单把界面点亮。
         if let Some(v) = load_manifest_disk(host) {
             if let Ok(mut g) = MAN_CACHE.lock() {
                 *g = Some((std::time::Instant::now(), v));
             }
+        }
+        // 然后**必须**真的去网上换一份：以前这里直接调 `manifest()`，
+        // 而它看到内存里刚塞进去的落盘清单就原样返回，等于每次启动都在
+        // 用旧清单 —— 快照版发了好几个，列表还停在老的。
+        if let Ok(mut g) = MAN_CACHE.lock() {
+            *g = None;
         }
         let t = std::time::Instant::now();
         match manifest(&host) {
@@ -916,11 +925,20 @@ fn warm_manifest(h: &MiyHostV1) {
                     .and_then(Value::as_array)
                     .map(|a| a.len())
                     .unwrap_or(0);
+                let latest = v
+                    .get("latest")
+                    .and_then(|l| l.get("snapshot"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("?");
                 unsafe {
                     host.log_str(
                         MIY_LOG_INFO,
-                        &format!("miy.mc: 版本清单已预缓存（{n} 个版本，{} ms）", t.elapsed().as_millis()),
+                        &format!(
+                            "miy.mc: 版本清单已预缓存（{n} 个版本，最新快照 {latest}，{} ms）",
+                            t.elapsed().as_millis()
+                        ),
                     );
+                    host.emit_str("mc.versions.updated", b"{}");
                 }
             }
             Err(e) => unsafe {
@@ -2571,10 +2589,57 @@ fn service_rename(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
         .into_bytes())
 }
 
+/// 强制刷新版本清单：跳过缓存，镜像 → 官方，成功后落盘并发事件。
+///
+/// 版本页的「刷新」按钮用它 —— 快照版发布后不用等缓存过期，
+/// 也不用重启启动器。
+fn service_manifest_refresh(h: &MiyHostV1) -> Result<Vec<u8>, String> {
+    let started = std::time::Instant::now();
+    if let Ok(mut g) = MAN_CACHE.lock() {
+        *g = None;
+    }
+    let mut last = String::from("没有可用的清单地址");
+    let mut got: Option<(Value, &'static str)> = None;
+    for url in manifest_urls(h) {
+        match fetch_json(h, url) {
+            Ok(v) => {
+                got = Some((v, url));
+                break;
+            }
+            Err(e) => last = format!("{url}: {e}"),
+        }
+    }
+    let Some((v, url)) = got else {
+        return Err(last);
+    };
+    if let Ok(mut g) = MAN_CACHE.lock() {
+        *g = Some((std::time::Instant::now(), v.clone()));
+    }
+    save_manifest_disk(h, &v);
+    unsafe { h.emit_str("mc.versions.updated", b"{}") };
+    let latest = v.get("latest").cloned().unwrap_or(Value::Null);
+    let count = v
+        .get("versions")
+        .and_then(Value::as_array)
+        .map(|a| a.len())
+        .unwrap_or(0);
+    Ok(serde_json::to_vec(&json!({
+        "ok": true,
+        "latest": latest,
+        "count": count,
+        "source": url,
+        "ms": started.elapsed().as_millis() as u64,
+    }))
+    .unwrap_or_default())
+}
+
 fn service_versions(h: &MiyHostV1) -> Result<Vec<u8>, String> {
     // 先给能立刻拿到的：内存缓存 → 落盘清单 → 才去联网。
-    // 缓存超过 5 分钟就顺手在后台换一份新的，换完发事件让界面自己重画。
-    let stale = man_age().map(|a| a > std::time::Duration::from_secs(300)).unwrap_or(true);
+    // 缓存超过一分钟就顺手在后台换一份新的，换完发事件让界面自己重画。
+    // 阈值压到 60 秒：快照版发布后一分钟内就能在列表里看到。
+    let stale = man_age()
+        .map(|a| a > std::time::Duration::from_secs(60))
+        .unwrap_or(true);
     let man = match man_cached() {
         Some(v) => {
             if stale {
@@ -7408,6 +7473,7 @@ unsafe fn dispatch_inner(
 
     let result = match name {
         "miy.mc.versions" => service_versions(&st.host),
+        "miy.mc.manifest.refresh" => service_manifest_refresh(&st.host),
         "miy.mc.installed" => service_installed(&st.host, &req),
         "miy.mc.roots" => service_roots(&st.host, &req),
         "miy.mc.root.add" => service_root_add(&st.host, &req),

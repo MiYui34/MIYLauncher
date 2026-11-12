@@ -741,7 +741,25 @@
     } catch (e) { /* 用户取消对话框不算错误 */ }
     btn.disabled = false;
   };
-  $("#refresh").onclick = () => { loadInstalled().then(load); };
+  // 刷新：先强制拉一次最新清单（快照版发布后不用等缓存过期），再重画。
+  $("#refresh").onclick = async () => {
+    const btn = $("#refresh");
+    btn.disabled = true;
+    try {
+      const r = await miy.call("miy.mc.manifest.refresh", {});
+      if (r && r.ok) {
+        const lt = r.latest || {};
+        log("清单已更新：" + r.count + " 个版本，最新正式版 " + (lt.release || "?") +
+            "，最新快照 " + (lt.snapshot || "?") + "（" + r.ms + " ms）", "on");
+      } else {
+        log("刷新清单失败：" + ((r && r.error) || "未知错误"), "bad");
+      }
+    } catch (e) {
+      log("刷新清单失败：" + (e && e.message ? e.message : e), "bad");
+    }
+    btn.disabled = false;
+    loadInstalled().then(load);
+  };
 
   // 导入整合包：`.mrpack` 会连原版和加载器一起装成一个版本；
   // 普通压缩包按老规矩，把 mods/config 铺进同版本的实例目录。
