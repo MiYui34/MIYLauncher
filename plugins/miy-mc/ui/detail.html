@@ -112,6 +112,8 @@
   .dialog h3{margin:0 0 8px; font:600 16px/22px var(--font)}
   .dialog p{margin:0 0 16px; color:var(--on-var); font-size:13px; line-height:20px}
   .dacts{display:flex; justify-content:flex-end; gap:10px}
+  .dialog select{width:100%; height:38px; margin-bottom:10px; padding:0 10px; font:13px var(--font);
+    color:var(--on); background:var(--lowest); border:1px solid var(--outline-var); border-radius:8px}
   .check{display:flex; align-items:center; gap:8px; font-size:13px; color:var(--on-var); cursor:pointer}
   .check input{width:16px; height:16px; accent-color:var(--primary)}
   /* 导出时的文件勾选清单 */
@@ -229,6 +231,11 @@
     <div class="row"><span class="k">客户端</span><span class="v" id="vjar">—</span></div>
     <div class="row"><span class="k">Java</span><span class="v" id="vjava">—</span></div>
     <div class="row"><span class="k">发布时间</span><span class="v" id="vdate">—</span></div>
+    <div class="row" id="loaderRow" hidden>
+      <span class="k">模组加载器</span>
+      <span class="v" id="loaderHint">原版，装进去的模组不会被加载</span>
+      <button id="addLoader">装加载器</button>
+    </div>
   </div>
 
   <div class="acts">
@@ -453,6 +460,8 @@
     $("#vjava").textContent = info.java ? "Java " + info.java : "跟随默认";
     $("#vdate").textContent = info.released ? info.released.slice(0, 10) : "—";
     fillChips(info);
+    // 原版版本里装模组是不会被加载的，给一个就地装加载器的入口。
+    $("#loaderRow").hidden = (info.loader || "原版") !== "原版";
     $("#go").disabled = !info.runnable;
     log(info.ok === false ? "该版本尚未安装完成，可以点「补齐资源」补全。" : "可以启动、补齐资源、改名或删除。", info.ok === false ? "bad" : "on");
   }
@@ -477,6 +486,84 @@
     } finally {
       busy = false;
     }
+  }
+
+  // 原版版本就地装加载器：合并进同一个目录，模组和存档都不动。
+  async function pickLoader() {
+    const mc = info.mc || info.id;
+    log("正在读取加载器版本…", "busy");
+    let list = [];
+    try {
+      const r = await miy.call("miy.mc.loaders", { mc }, 60000);
+      list = (r && r.loaders) || [];
+    } catch (e) { /* 下面统一报错 */ }
+    if (!list.length) {
+      log("没查到可用的加载器，检查一下网络。", "bad");
+      return;
+    }
+
+    const mask = document.createElement("div");
+    mask.className = "mask";
+    const dlg = document.createElement("div");
+    dlg.className = "dialog";
+    const h = document.createElement("h3");
+    h.textContent = "安装模组加载器";
+    const p = document.createElement("p");
+    p.textContent = "装到「" + info.id + "」里，现有的模组和存档都会保留。";
+    const ld = document.createElement("select");
+    const ver = document.createElement("select");
+    for (const l of list) {
+      const o = document.createElement("option");
+      o.value = l.id;
+      o.textContent = l.name || l.id;
+      ld.append(o);
+    }
+    const fillVer = () => {
+      const one = list.find(x => x.id === ld.value);
+      ver.replaceChildren(...((one && one.versions) || []).map(v => {
+        const o = document.createElement("option");
+        o.value = v.version;
+        o.textContent = v.version + (v.stable ? "" : "（测试）");
+        return o;
+      }));
+    };
+    ld.onchange = fillVer;
+    fillVer();
+    const acts = document.createElement("div");
+    acts.className = "dacts";
+    const no = document.createElement("button");
+    no.textContent = "取消";
+    no.onclick = () => mask.remove();
+    const yes = document.createElement("button");
+    yes.className = "primary";
+    yes.textContent = "安装";
+    yes.onclick = async () => {
+      yes.disabled = true;
+      yes.textContent = "安装中…";
+      try {
+        const r = await miy.call("miy.mc.install", {
+          id: mc, name: info.id, loader: ld.value, loaderVersion: ver.value,
+        }, 3600000);
+        if (r && r.ok) {
+          mask.remove();
+          await load();
+          log(ld.value + " " + ver.value + " 已装好，模组现在会生效了。", "on");
+        } else {
+          yes.disabled = false;
+          yes.textContent = "安装";
+          log((r && r.error) || "加载器没装上。", "bad");
+        }
+      } catch (e) {
+        yes.disabled = false;
+        yes.textContent = "安装";
+        log("加载器没装上。", "bad");
+      }
+    };
+    acts.append(no, yes);
+    dlg.append(h, p, ld, ver, acts);
+    mask.append(dlg);
+    mask.onclick = e => { if (e.target === mask) mask.remove(); };
+    document.body.append(mask);
   }
 
   async function del() {
@@ -586,6 +673,7 @@
   $("#back").onclick = () => miy.goto("page:miy.mc/games");
   $("#save").onclick = save;
   $("#del").onclick = del;
+  $("#addLoader").onclick = pickLoader;
   $("#go").onclick = launch;
   $("#fix").onclick = async () => {
     if (busy || !name) return;

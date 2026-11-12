@@ -1010,9 +1010,36 @@ fn resolve(h: &MiyHostV1, man: &Value, id: &str, depth: u32) -> Result<Value, St
     }
 }
 
+/// 这份 json 是不是「已经合并过加载器」的产物。
+///
+/// 合并后的 json 没有 `inheritsFrom`，主类是加载器的（Fabric 是 KnotClient）。
+/// 拿它当底再合并一次，加载器的库会叠两遍，原版的 natives 也早就被去重掉了。
+fn is_merged_loader(v: &Value) -> bool {
+    if v.get("inheritsFrom").is_some() {
+        return false;
+    }
+    let main = v.get("mainClass").and_then(Value::as_str).unwrap_or("");
+    main.contains("fabric") || main.contains("quilt") || main.contains("knot")
+}
+
+/// 从镜像/官方取原版 json（不读本地），合并加载器时当底用。
+fn fetch_vanilla(h: &MiyHostV1, man: &Value, id: &str) -> Result<Value, String> {
+    let urls = version_urls(man, id);
+    if urls.is_empty() {
+        return Err(format!("清单里没有版本 {id}"));
+    }
+    let mut last = String::new();
+    for u in &urls {
+        match fetch_json(h, u) {
+            Ok(v) => return Ok(v),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
 /// 子版本覆盖父版本，但 `libraries` / `arguments` 是**追加**。
-fn merge(parent: Value, child: Value) -> Value {
-    let mut out = match parent {
+fn merge(parent: Value, child: Value) -> Value {    let mut out = match parent {
         Value::Object(m) => m,
         other => return other,
     };
@@ -1063,13 +1090,19 @@ fn merge(parent: Value, child: Value) -> Value {
     Value::Object(out)
 }
 
-/// 同一个库的判定键：`group:artifact`，忽略版本号与 classifier。
+/// 同一个库的判定键：`group:artifact:classifier`，忽略版本号。
+///
+/// classifier 必须算进去：`org.lwjgl:lwjgl:3.4.3` 和
+/// `org.lwjgl:lwjgl:3.4.3:natives-windows` 是**两个不同的文件**。
+/// 只按 `group:artifact` 去重会把 26.3 的 56 个 natives 包全丢掉，
+/// 表现就是 LWJGL 找不到 `lwjgl.dll`，Sodium 在 preLaunch 直接崩。
 fn lib_key(name: &str) -> String {
     let mut it = name.split(':');
-    match (it.next(), it.next()) {
-        (Some(g), Some(a)) => format!("{g}:{a}"),
-        _ => name.to_string(),
-    }
+    let g = it.next().unwrap_or("");
+    let a = it.next().unwrap_or("");
+    let _version = it.next();
+    let classifier = it.next().unwrap_or("");
+    format!("{g}:{a}:{classifier}")
 }
 
 /// 把加载器的 profile 合进原版 json，得到一份**自包含**的版本配置。
@@ -3355,6 +3388,15 @@ fn install_fabric_api(h: &MiyHostV1, dir: &str, mc: &str) -> Result<String, Stri
     let size = file.get("size").and_then(Value::as_u64).unwrap_or(0);
     let mods = format!("{dir}\\mods");
     std::fs::create_dir_all(&mods).map_err(|e| format!("创建 mods 目录失败：{e}"))?;
+    // 已经有 Fabric API 就别再下一份：同一个 mods 里放两个版本，Fabric 会报重复模组。
+    if let Ok(rd) = std::fs::read_dir(&mods) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().to_lowercase();
+            if n.starts_with("fabric-api-") && n.ends_with(".jar") {
+                return Ok(e.file_name().to_string_lossy().to_string());
+            }
+        }
+    }
     let path = format!("{mods}\\{fname}");
     if std::path::Path::new(&path).is_file() {
         return Ok(fname.to_string());
@@ -3395,6 +3437,14 @@ fn service_install(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
     let man = manifest_for(h, id);
     let mut v = resolve(h, &man, id, 0)?;
     if merged {
+        // 本地 json 可能已经是「合并过加载器」的那份：拿它当底再合并一次，
+        // 等于把加载器的库又叠一遍，而且原版那份 natives 早就被去重掉了。
+        // 这种情况回网络取原版 json 当底。
+        if is_merged_loader(&v) {
+            if let Ok(fresh) = fetch_vanilla(h, &man, id) {
+                v = fresh;
+            }
+        }
         let prof = fetch_loader_profile(h, &loader, id, &loader_ver)?;
         // 合并后 **不要** 改 json 里的 `id`：`plan()` 要用它拼客户端地址
         // `{mirror}/version/<id>/client`，改成目录名会拼出不存在的 404 地址。
@@ -6273,6 +6323,32 @@ fn service_mods_install(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
     let target = req.get("target").and_then(Value::as_str).unwrap_or("");
     let custom = req.get("dir").and_then(Value::as_str).unwrap_or("");
     let root = game_root(h, req);
+    // 目标版本没装加载器的话，模组装进去也不会被加载 —— 直接说清楚，
+    // 让前端提示"先装加载器"，别让用户以为装好了。
+    if custom.is_empty() && !target.is_empty() {
+        let vdir = std::path::Path::new(&root).join("versions");
+        let (mc_ver, lname, _, _, _) = describe(&vdir, target);
+        if lname == "原版" {
+            let need = first
+                .get("loaders")
+                .and_then(Value::as_array)
+                .and_then(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .find(|s| *s != "minecraft")
+                })
+                .unwrap_or("fabric");
+            return Ok(serde_json::to_vec(&json!({
+                "ok": false,
+                "code": "no_loader",
+                "target": target,
+                "mc": mc_ver,
+                "loader": need,
+                "error": format!("「{target}」是原版，没有装 {need}，模组不会生效。"),
+            }))
+            .unwrap_or_default());
+        }
+    }
     // 用户自己选了文件夹就装那儿；否则装进目标版本的 mods。
     let dir = if !custom.is_empty() {
         custom.to_string()

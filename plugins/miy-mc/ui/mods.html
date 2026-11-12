@@ -642,6 +642,11 @@
         log(h.title + " 已安装到 " + (customDir || curVersion || "mods") + "。", "on");
         return;
       }
+      if (r && r.code === "no_loader") {
+        if (btn) { btn.disabled = false; btn.textContent = "安装"; }
+        askLoader(h, btn, vid, r);
+        return;
+      }
       if (btn) { btn.disabled = false; btn.textContent = "安装"; }
       log((r && r.error) || "安装未完成，请稍后重试。", "bad");
     } catch (e) {
@@ -651,6 +656,68 @@
       running = Math.max(0, running - 1);
       bumpFab();
     }
+  }
+
+  /* ---- 没有加载器的版本 ---- */
+  // 原版版本里装模组是不会被加载的，问一句要不要顺手把加载器装上。
+  async function latestLoader(loader, mc) {
+    try {
+      const r = await miy.call("miy.mc.loaders", { mc }, 60000);
+      const one = ((r && r.loaders) || []).find(x => x.id === loader);
+      const v = one && (one.versions || [])[0];
+      return (v && v.version) || "";
+    } catch (e) { return ""; }
+  }
+
+  function askLoader(h, btn, vid, r) {
+    const mask = document.createElement("div");
+    mask.className = "mask";
+    const sheet = document.createElement("div");
+    sheet.className = "sheet";
+    const t = document.createElement("h3");
+    t.textContent = "这个版本没有模组加载器";
+    const sub = document.createElement("div");
+    sub.className = "sub";
+    sub.textContent = "「" + r.target + "」是原版，装进去的模组不会被加载。要现在装 " + r.loader + " 吗？";
+    const acts = document.createElement("div");
+    acts.className = "acts";
+    const no = document.createElement("button");
+    no.textContent = "取消";
+    no.onclick = () => mask.remove();
+    const yes = document.createElement("button");
+    yes.className = "primary";
+    yes.textContent = "装 " + r.loader + " 并继续";
+    yes.onclick = async () => {
+      yes.disabled = true;
+      yes.textContent = "正在装加载器…";
+      try {
+        const lv = await latestLoader(r.loader, r.mc || r.target);
+        if (!lv) {
+          log("没查到 " + r.loader + " 的版本，先手动装一个吧。", "bad");
+          mask.remove();
+          return;
+        }
+        const ins = await miy.call("miy.mc.install", {
+          id: r.mc || r.target, name: r.target, loader: r.loader, loaderVersion: lv,
+        }, 3600000);
+        if (!ins || !ins.ok) {
+          log((ins && ins.error) || "加载器没装上。", "bad");
+          mask.remove();
+          return;
+        }
+        log(r.loader + " " + lv + " 已装到 " + r.target + "，接着装模组。", "on");
+        mask.remove();
+        install(h, btn, vid);
+      } catch (e) {
+        log("加载器没装上。", "bad");
+        mask.remove();
+      }
+    };
+    acts.append(no, yes);
+    sheet.append(t, sub, acts);
+    mask.append(sheet);
+    mask.onclick = e => { if (e.target === mask) mask.remove(); };
+    document.body.append(mask);
   }
 
   /* ---- 前置模组 ---- */
