@@ -661,11 +661,20 @@
     if (!deps.length) return install(h, btn, vid);
     let list = [];
     try {
-      const r = await miy.call("miy.mc.deps",
-        { versions: deps.map(d => d.version).filter(Boolean) }, 30000);
+      // 有的前置只依赖项目、没钉版本号（Modrinth 允许），这种交给后端按当前
+      // MC 版本和加载器挑一个能用的，别在这里瞎猜。
+      const r = await miy.call("miy.mc.deps", {
+        versions: deps.map(d => d.version).filter(Boolean),
+        projects: deps.filter(d => !d.version).map(d => d.project).filter(Boolean),
+        mc: mcVersion || "",
+        loader: loader || "",
+      }, 60000);
       list = (r && r.deps) || [];
     } catch (e) { /* 查不到前置就直装，别挡路 */ }
-    if (!list.length) return install(h, btn, vid);
+    if (!list.length) {
+      log("没查到前置模组的详情，先装本体。", "bad");
+      return install(h, btn, vid);
+    }
     // 已经装过的前置标出来，省得重复下载。
     let have = [];
     try {

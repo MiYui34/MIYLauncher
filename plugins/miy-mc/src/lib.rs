@@ -7173,8 +7173,43 @@ fn service_mod_versions(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
 ///
 /// 详情页点「安装」时如果这一版有 required 前置，就先问这里，弹一张清单让用户
 /// 一起装或跳过去看 —— 和 PCL2 的「缺少前置」提示一个意思。
+/// 前置模组里没钉版本号的那种（Modrinth 允许只依赖项目），按当前 MC 版本和加载器
+/// 挑一个能用的：优先正式版，其次最新的那个。
+fn pick_project_version(h: &MiyHostV1, base: &str, pid: &str, mc: &str, loader: &str) -> Option<Value> {
+    let v = fetch_json_race(h, &format!("{base}/project/{pid}/version")).ok()?;
+    let arr = v.as_array()?;
+    let fits = |x: &Value| -> bool {
+        let g = x
+            .get("game_versions")
+            .and_then(Value::as_array)
+            .map(|a| mc.is_empty() || a.iter().any(|s| s.as_str() == Some(mc)))
+            .unwrap_or(true);
+        let l = x
+            .get("loaders")
+            .and_then(Value::as_array)
+            .map(|a| loader.is_empty() || a.iter().any(|s| s.as_str() == Some(loader)))
+            .unwrap_or(true);
+        g && l
+    };
+    let cand: Vec<&Value> = arr.iter().filter(|x| fits(x)).collect();
+    let pick = cand
+        .iter()
+        .find(|x| x.get("version_type").and_then(Value::as_str) == Some("release"))
+        .or_else(|| cand.first())?;
+    let mut v = (*pick).clone();
+    // 自建中转的精简版本对象里没有 project_id，补上——后面要靠它查标题和图标。
+    if v.get("project_id").and_then(Value::as_str).unwrap_or("").is_empty() {
+        if let Some(o) = v.as_object_mut() {
+            o.insert("project_id".to_string(), json!(pid));
+        }
+    }
+    Some(v)
+}
+
 fn service_deps(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
     let modrinth = modrinth_base();
+    let mc = req.get("mc").and_then(Value::as_str).unwrap_or("");
+    let loader = req.get("loader").and_then(Value::as_str).unwrap_or("");
     let ids: Vec<String> = req
         .get("versions")
         .and_then(Value::as_array)
@@ -7186,13 +7221,33 @@ fn service_deps(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
                 .collect()
         })
         .unwrap_or_default();
-    if ids.is_empty() {
+    let loose: Vec<String> = req
+        .get("projects")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    if ids.is_empty() && loose.is_empty() {
         return Ok(serde_json::to_vec(&json!({ "ok": true, "deps": [] })).unwrap_or_default());
     }
-    let ids_json = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into());
-    let vers = fetch_json_race(h, &format!("{modrinth}/versions?ids={}", enc(&ids_json)))
-        .unwrap_or(Value::Array(Vec::new()));
-    let arr = vers.as_array().cloned().unwrap_or_default();
+    let mut arr: Vec<Value> = Vec::new();
+    if !ids.is_empty() {
+        let ids_json = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into());
+        let vers = fetch_json_race(h, &format!("{modrinth}/versions?ids={}", enc(&ids_json)))
+            .unwrap_or(Value::Array(Vec::new()));
+        arr.extend(vers.as_array().cloned().unwrap_or_default());
+    }
+    // 只依赖项目、没钉版本号的前置：按当前 MC + 加载器挑一个。
+    for pid in &loose {
+        if let Some(v) = pick_project_version(h, &modrinth, pid, mc, loader) {
+            arr.push(v);
+        }
+    }
 
     // 项目信息（标题 / 图标 / slug）一次批量取，别一个前置发一次请求。
     let mut pids: Vec<String> = arr
