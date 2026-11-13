@@ -973,6 +973,17 @@ fn version_urls(man: &Value, id: &str) -> Vec<String> {
 
 /// 解析一个版本，沿 `inheritsFrom` 向上合并（Fabric/Forge 就靠这条链）。
 /// 在所有已登记的目录里找 `versions/{id}/{id}.json`。
+/// 只在指定的游戏目录里找版本 json。
+///
+/// 和 `local_version_any` 的区别很重要：装到一个空目录时，如果去"所有登记的
+/// 目录"里找，会把另一个目录里已经合并过加载器的 json 当成原版底稿抄过来，
+/// 结果新装的"原版"其实是 Fabric 版本，还会多塞一份 Fabric API。
+fn local_version_in(root: &str, id: &str) -> Option<Value> {
+    let file = format!("{root}/versions/{id}/{id}.json");
+    let bytes = std::fs::read(&file).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
 fn local_version_any(h: &MiyHostV1, id: &str) -> Option<Value> {
     for root in all_roots(h) {
         let file = format!("{root}/versions/{id}/{id}.json");
@@ -993,12 +1004,36 @@ fn manifest_for(h: &MiyHostV1, id: &str) -> Value {
     manifest(h).unwrap_or(Value::Null)
 }
 
+/// 同上，但只看指定目录：装到空目录时必须联网取清单。
+fn manifest_for_in(h: &MiyHostV1, id: &str, root: &str) -> Value {
+    if local_version_in(root, id).is_some() {
+        return Value::Null;
+    }
+    manifest(h).unwrap_or(Value::Null)
+}
+
 fn resolve(h: &MiyHostV1, man: &Value, id: &str, depth: u32) -> Result<Value, String> {
+    resolve_at(h, man, id, None, depth)
+}
+
+/// `root` 为 `Some` 时只认那个目录里的本地 json（安装用），
+/// 为 `None` 时沿用"任何登记目录里有就算"的老行为（启动、详情用）。
+fn resolve_at(
+    h: &MiyHostV1,
+    man: &Value,
+    id: &str,
+    root: Option<&str>,
+    depth: u32,
+) -> Result<Value, String> {
     if depth > 5 {
         return Err(format!("{id}: inheritsFrom 层数过多"));
     }
     // 装好的版本先读本地 json：镜像挂了也能启动、也能看详情。
-    let raw = match local_version_any(h, id) {
+    let local = match root {
+        Some(r) => local_version_in(r, id),
+        None => local_version_any(h, id),
+    };
+    let raw = match local {
         Some(v) => v,
         None => {
             let urls = version_urls(man, id);
@@ -1021,7 +1056,7 @@ fn resolve(h: &MiyHostV1, man: &Value, id: &str, depth: u32) -> Result<Value, St
     };
     match raw.get("inheritsFrom").and_then(Value::as_str) {
         Some(parent_id) => {
-            let parent = resolve(h, man, parent_id, depth + 1)?;
+            let parent = resolve_at(h, man, parent_id, root, depth + 1)?;
             Ok(merge(parent, raw))
         }
         None => Ok(raw),
@@ -2234,7 +2269,12 @@ fn modpack_install_bytes(
         .map(|c| if "\\/:*?\"<>|".contains(c) { '_' } else { c })
         .collect();
     let base = base.trim().to_string();
-    let base = if base.is_empty() { format!("{} 整合包", pack.mc) } else { base };
+    let mut base = if base.is_empty() { format!("{} 整合包", pack.mc) } else { base };
+    // 包名正好等于 MC 版本号时，实例目录会和原版目录撞在一起 ——
+    // 那会把原版 json 覆盖成加载器 profile，原版就废了。
+    if base == pack.mc {
+        base = format!("{} 整合包", pack.mc);
+    }
     let versions = std::path::Path::new(root).join("versions");
     let mut name = base.clone();
     let mut n = 2;
@@ -2757,6 +2797,37 @@ fn service_versions(h: &MiyHostV1) -> Result<Vec<u8>, String> {
 
 /// 只读本地版本 JSON 的轻量信息：不碰网络清单，毫秒级。
 /// 模组列表页只要 mc 版本和加载器，没必要为它去拉一遍版本清单。
+/// 从版本 json 的 libraries 里抠出加载器版本号（`net.fabricmc:fabric-loader:0.20.1`）。
+fn loader_version_of(v: &Value, loader: &str) -> Option<String> {
+    let want = match loader {
+        "fabric" => "net.fabricmc:fabric-loader",
+        "quilt" => "org.quiltmc:quilt-loader",
+        "forge" => "net.minecraftforge:forge",
+        "neoforge" => "net.neoforged:neoforge",
+        _ => return None,
+    };
+    for lib in v.get("libraries").and_then(Value::as_array)? {
+        let Some(name) = lib.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(rest) = name.strip_prefix(want) else {
+            continue;
+        };
+        let ver = rest.trim_start_matches(':').split(':').next().unwrap_or("");
+        if ver.is_empty() {
+            continue;
+        }
+        // Forge 的版本号是 `<mc>-<forge>`，整合包里只认后半段。
+        if loader == "forge" {
+            if let Some((_, tail)) = ver.split_once('-') {
+                return Some(tail.to_string());
+            }
+        }
+        return Some(ver.to_string());
+    }
+    None
+}
+
 fn service_verinfo(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
     let id = field(req, "id").ok_or("缺 id")?;
     let root = game_root(h, req);
@@ -2766,28 +2837,52 @@ fn service_verinfo(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .ok_or_else(|| format!("找不到版本 {id} 的配置文件"))?;
+    // 合并过的版本 json 里带着 clientVersion（真正的游戏版本），比按名字猜准。
     let base = v
-        .get("inheritsFrom")
+        .get("clientVersion")
         .and_then(Value::as_str)
-        .unwrap_or(&id)
-        .to_string();
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            v.get("inheritsFrom")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| id.to_string());
+    // 加载器优先看 json 里的库（合并过的版本名字里可能根本没有 "fabric"），
+    // 认不出来才退回按版本名猜。
+    let detected = detect_loader(&v);
     let lower = id.to_lowercase();
-    let loader = if lower.contains("neoforge") {
-        "neoforge"
-    } else if lower.contains("fabric") {
-        "fabric"
-    } else if lower.contains("quilt") {
-        "quilt"
-    } else if lower.contains("forge") {
-        "forge"
-    } else {
-        ""
+    let loader = match detected.as_ref().map(|(n, _)| n.as_str()) {
+        Some("Fabric") => "fabric",
+        Some("Quilt") => "quilt",
+        Some("NeoForge") => "neoforge",
+        Some("Forge") => "forge",
+        _ if lower.contains("neoforge") => "neoforge",
+        _ if lower.contains("fabric") => "fabric",
+        _ if lower.contains("quilt") => "quilt",
+        _ if lower.contains("forge") => "forge",
+        _ => "",
     };
+    let mut loader_ver = detected
+        .as_ref()
+        .map(|(_, ver)| ver.clone())
+        .filter(|s| !s.is_empty())
+        .or_else(|| loader_version_of(&v, loader))
+        .unwrap_or_default();
+    // Forge 的版本号是 `<mc>-<forge>`，整合包里只认后半段。
+    if loader == "forge" {
+        if let Some((_, tail)) = loader_ver.split_once('-') {
+            loader_ver = tail.to_string();
+        }
+    }
     Ok(serde_json::to_vec(&json!({
         "ok": true,
         "id": id,
         "mc": base,
         "loader": loader,
+        "loaderVersion": loader_ver,
         "type": v.get("type").cloned().unwrap_or(Value::Null),
         "mainClass": v.get("mainClass").cloned().unwrap_or(Value::Null),
     }))
@@ -3558,8 +3653,8 @@ fn service_install(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
         return Err(format!("版本名里不能有特殊字符：{name}"));
     }
     let root = game_root(h, req);
-    let man = manifest_for(h, id);
-    let mut v = resolve(h, &man, id, 0)?;
+    let man = manifest_for_in(h, id, &root);
+    let mut v = resolve_at(h, &man, id, Some(&root), 0)?;
     if merged {
         // 本地 json 可能已经是「合并过加载器」的那份：拿它当底再合并一次，
         // 等于把加载器的库又叠一遍，而且原版那份 natives 早就被去重掉了。
@@ -5274,6 +5369,7 @@ fn export_dir(
     dir: &std::path::Path,
     sub: &str,
     only: Option<&Vec<String>>,
+    prefix: &str,
     count: &mut u32,
 ) -> Result<(), String> {
     let base = dir.join(sub);
@@ -5287,13 +5383,43 @@ fn export_dir(
             }
         }
         let Ok(bytes) = std::fs::read(&path) else { continue };
-        zip.add(&format!("{sub}/{rel}"), &bytes)?;
+        zip.add(&format!("{prefix}{sub}/{rel}"), &bytes)?;
         *count += 1;
     }
     Ok(())
 }
 
-/// 把版本导出成整合包 zip：模组 + 资源包 + 光影 + 配置 + 选项 + 一份清单。
+/// 按 sha1 在 Modrinth 上认这个文件；认得出来就返回 mrpack 的 `files[]` 条目。
+///
+/// 认出来的模组只写下载地址，包体小、装的时候还能校验哈希。
+fn modrinth_entry(h: &MiyHostV1, sha1: &str, bytes: &[u8]) -> Option<Value> {
+    let url = format!("{}/version_file/{sha1}?algorithm=sha1", modrinth_base());
+    let v = fetch_json(h, &url).ok()?;
+    let files = v.get("files").and_then(Value::as_array)?;
+    let f = files
+        .iter()
+        .find(|f| f.get("primary").and_then(Value::as_bool).unwrap_or(false))
+        .or_else(|| files.first())?;
+    let url = f.get("url").and_then(Value::as_str)?;
+    let name = f.get("filename").and_then(Value::as_str)?;
+    let hashes = f
+        .get("hashes")
+        .cloned()
+        .unwrap_or_else(|| json!({ "sha1": sha1 }));
+    Some(json!({
+        "path": format!("mods/{name}"),
+        "hashes": hashes,
+        "env": { "client": "required", "server": "unsupported" },
+        "downloads": [url],
+        "fileSize": f.get("size").cloned().unwrap_or(json!(bytes.len())),
+    }))
+}
+
+/// 把版本导出成 Modrinth 的 `.mrpack`：`modrinth.index.json` + `overrides/`。
+///
+/// 关键在 `dependencies` 里写明 Minecraft 与加载器版本 —— 装包的人即使没装过
+/// 游戏，导入时也会先把原版和加载器装好，再铺文件。能在 Modrinth 上按 sha1
+/// 认出来的模组只写下载地址，认不出来的才塞进 `overrides/mods/`。
 ///
 /// `mods` / `resourcepacks` / `shaderpacks` 传数组就是「只导出这些」（相对路径），
 /// 不传就是全导，传空数组就是不导 —— 和 PCL2 导出时的勾选一致。
@@ -5340,10 +5466,11 @@ fn service_export(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
 
     let (task, _cancel) = task_new("export", &format!("导出 {id}"), 1);
     let mut zip = ZipOut::new();
-    let mut mods_meta: Vec<Value> = Vec::new();
+    let mut index_files: Vec<Value> = Vec::new();
     let mut count = 0u32;
+    let mut packed = 0u32;
 
-    // 模组单独走一遍：清单里要记 sha1，方便以后按哈希重新下载。
+    // 模组：能按 sha1 在 Modrinth 上认出来的只记下载地址。
     {
         let base = dir.join("mods");
         let mut files = Vec::new();
@@ -5355,26 +5482,43 @@ fn service_export(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
                     continue;
                 }
             }
-            let Ok(bytes) = std::fs::read(&path) else { continue };
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
             let sha = crate::java::sha1_hex(&bytes);
-            mods_meta.push(json!({
-                "file": rel,
-                "sha1": sha,
-                "size": bytes.len(),
-            }));
-            zip.add(&format!("mods/{rel}"), &bytes)?;
+            if let Some(entry) = modrinth_entry(h, &sha, &bytes) {
+                index_files.push(entry);
+                count += 1;
+                continue;
+            }
+            zip.add(&format!("overrides/mods/{rel}"), &bytes)?;
+            packed += 1;
             count += 1;
         }
     }
-    export_dir(&mut zip, &dir, "resourcepacks", want_rp.as_ref(), &mut count)?;
-    export_dir(&mut zip, &dir, "shaderpacks", want_sp.as_ref(), &mut count)?;
+    export_dir(
+        &mut zip,
+        &dir,
+        "resourcepacks",
+        want_rp.as_ref(),
+        "overrides/",
+        &mut count,
+    )?;
+    export_dir(
+        &mut zip,
+        &dir,
+        "shaderpacks",
+        want_sp.as_ref(),
+        "overrides/",
+        &mut count,
+    )?;
     if want_config {
-        export_dir(&mut zip, &dir, "config", None, &mut count)?;
+        export_dir(&mut zip, &dir, "config", None, "overrides/", &mut count)?;
     }
     if want_options {
         let opt = dir.join("options.txt");
         if let Ok(bytes) = std::fs::read(&opt) {
-            zip.add("options.txt", &bytes)?;
+            zip.add("overrides/options.txt", &bytes)?;
             count += 1;
         }
     }
@@ -5400,14 +5544,18 @@ fn service_export(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
             walk_files(&wdir, &wdir, &mut files);
             files.sort_by_key(|(rel, _)| rel.clone());
             for (rel, path) in files {
-                let Ok(bytes) = std::fs::read(&path) else { continue };
-                zip.add(&format!("saves/{w}/{rel}"), &bytes)?;
+                let Ok(bytes) = std::fs::read(&path) else {
+                    continue;
+                };
+                zip.add(&format!("overrides/saves/{w}/{rel}"), &bytes)?;
                 count += 1;
             }
         }
     }
 
-    let info = service_verinfo(h, req).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+    let info = service_verinfo(h, req)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     let mc = info
         .as_ref()
         .and_then(|v| v.get("mc").and_then(Value::as_str))
@@ -5418,27 +5566,35 @@ fn service_export(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
         .and_then(|v| v.get("loader").and_then(Value::as_str))
         .unwrap_or("")
         .to_string();
-    let manifest = json!({
-        "format": "miylauncher-modpack/1",
-        "name": id,
-        "mc": mc,
-        "loader": loader,
-        "created": std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-        "mods": mods_meta,
-        "files": count,
+    let loader_ver = info
+        .as_ref()
+        .and_then(|v| v.get("loaderVersion").and_then(Value::as_str))
+        .unwrap_or("")
+        .to_string();
+
+    let mut deps = serde_json::Map::new();
+    deps.insert("minecraft".to_string(), json!(mc));
+    if !loader.is_empty() && !loader_ver.is_empty() {
+        let key = match loader.as_str() {
+            "fabric" => "fabric-loader",
+            "quilt" => "quilt-loader",
+            other => other,
+        };
+        deps.insert(key.to_string(), json!(loader_ver));
+    }
+    let index = json!({
+        "formatVersion": 1,
+        "game": "minecraft",
+        "versionId": "1.0.0",
+        "name": format!("{id} 整合包"),
+        "summary": format!("由 MIYLauncher 从 {id} 导出"),
+        "files": index_files,
+        "dependencies": Value::Object(deps),
     });
     zip.add(
-        "modpack.json",
-        &serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
+        "modrinth.index.json",
+        &serde_json::to_vec_pretty(&index).unwrap_or_default(),
     )?;
-    let readme = format!(
-        "MIYLauncher 整合包\n\n版本：{id}\nMinecraft：{mc}\n加载器：{}\n\n把 mods 与 config 放进对应版本的目录即可。\n",
-        if loader.is_empty() { "原版" } else { &loader }
-    );
-    zip.add("README.txt", readme.as_bytes())?;
 
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -5458,7 +5614,7 @@ fn service_export(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
         None => {
             let out_dir = std::path::Path::new(&root).join("exports");
             std::fs::create_dir_all(&out_dir).map_err(|e| format!("无法创建导出目录：{e}"))?;
-            out_dir.join(format!("{id}-{stamp}.zip"))
+            out_dir.join(format!("{id}-{stamp}.mrpack"))
         }
     };
     std::fs::write(&out, zip.finish()).map_err(|e| format!("无法写入整合包：{e}"))?;
@@ -5467,7 +5623,8 @@ fn service_export(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
         "ok": true,
         "path": out.to_string_lossy(),
         "files": count,
-        "mods": mods_meta.len(),
+        "mods": index_files.len(),
+        "packed": packed,
     }))
     .unwrap_or_default())
 }

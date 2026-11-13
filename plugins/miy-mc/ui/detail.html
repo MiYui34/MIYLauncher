@@ -328,7 +328,7 @@
     <div class="exlist" id="exlist"></div>
   </div>
   <div class="acts">
-    <button class="primary" id="exgo">导出整合包</button>
+    <button class="primary" id="exgo">导出整合包（.mrpack）</button>
     <button class="quiet" id="exsave">另存为…</button>
     <button class="quiet" id="exopen" disabled>打开所在文件夹</button>
   </div>
@@ -1005,7 +1005,7 @@
       busy = false;
       b.disabled = false;
       s.disabled = false;
-      b.textContent = "导出整合包";
+      b.textContent = "导出整合包（.mrpack）";
     }
   }
   $("#exgo").onclick = () => doExport("");
@@ -1015,7 +1015,7 @@
     let r = null;
     try {
       r = await miy.call("miy.app.saveFile",
-        { title: "导出整合包", name: name + ".zip" }, 120000);
+        { title: "导出整合包", name: name + ".mrpack" }, 120000);
     } catch (e) { r = null; }
     if (!r || !r.ok) {
       if (r && !r.cancelled) log((r && r.error) || "打不开保存对话框。", "bad");
