@@ -72,6 +72,7 @@ use windows::Win32::System::Ole::{
 };
 use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
+use windows::Win32::UI::WindowsAndMessaging::EnumChildWindows;
 
 /// 拖放目标。无状态：它只负责把"有东西进来了 / 走了 / 落下了"转成页面事件。
 #[implement(IDropTarget)]
@@ -86,6 +87,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         effect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
         let ok = !drop_files(pdataobj.as_ref()).is_empty();
+        crate::log::debug(&format!("拖放进入：{} 个文件", if ok { 1 } else { 0 }));
         unsafe {
             *effect = if ok { DROPEFFECT_COPY } else { DROPEFFECT_NONE };
         }
@@ -120,6 +122,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         effect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
         let paths = drop_files(pdataobj.as_ref());
+        crate::log::debug(&format!("拖放落下：{} 个文件", paths.len()));
         unsafe {
             *effect = if paths.is_empty() {
                 DROPEFFECT_NONE
@@ -580,8 +583,8 @@ pub fn run(probe: bool) -> i32 {
         };
         let _ = WINDOW.set(hwnd.0 as isize);
 
-        // 拖放目标挂在父窗口上：WebView2 子窗口关掉外部拖放后，OLE 会沿父链
-        // 找到这里。注册失败不影响启动，只是拖不进来。
+        // 拖放目标先挂在父窗口上（窗口边缘那圈 4 px 是父窗口的），
+        // WebView2 起来之后再挂到它的子窗口上（见 start_webview）。
         let drop_target: IDropTarget = DropTarget.into();
         if let Err(e) = RegisterDragDrop(hwnd, Some(&drop_target)) {
             crate::log::warn(&format!("注册拖放目标失败：{e}"));
@@ -632,7 +635,7 @@ pub fn run(probe: bool) -> i32 {
             && std::env::var_os("MIY_NO_INTRO").is_none()
             && std::env::var_os("MIY_UI_TAB").is_none()
             && settings::effective_str("core.ui.intro").as_deref() != Some("false");
-        start_webview(hwnd, intro);
+        start_webview(hwnd, intro, drop_target.clone());
 
         // `--ui-probe`：跑 2.5 s 后自己关窗，让首帧指标可以无人值守地量出来。
         if probe {
@@ -709,7 +712,41 @@ fn apply_bounds(hwnd: HWND) {
     });
 }
 
-fn start_webview(hwnd: HWND, intro: bool) {
+/// 把拖放目标挂到 `root` 及其所有子孙窗口上，返回挂成功的个数。
+///
+/// 为什么要挂到子窗口：OLE 的 `DoDragDrop` 从鼠标下的窗口开始找目标，
+/// 命中 WebView2 自己的窗口就停了，不会继续往父窗口找。WebView2 的窗口树
+/// 是 `Chrome_WidgetWin_0 → Chrome_WidgetWin_1 → Chrome_RenderWidgetHostHWND`，
+/// 逐个换掉最省事。
+fn attach_drop_to_tree(root: HWND, target: &IDropTarget) -> usize {
+    unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> windows::core::BOOL {
+        let list = &mut *(lparam.0 as *mut Vec<HWND>);
+        list.push(hwnd);
+        windows::core::BOOL(1)
+    }
+
+    let mut list: Vec<HWND> = vec![root];
+    unsafe {
+        let _ = EnumChildWindows(
+            Some(root),
+            Some(collect),
+            LPARAM(&mut list as *mut Vec<HWND> as isize),
+        );
+    }
+
+    let mut n = 0;
+    for h in list {
+        unsafe {
+            let _ = RevokeDragDrop(h);
+            if RegisterDragDrop(h, Some(target)).is_ok() {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+fn start_webview(hwnd: HWND, intro: bool, drop_target: IDropTarget) {
     // 用户数据目录必须在可写位置：装到 Program Files 时 exe 旁边写不了。
     let user_data = paths::webview_dir();
     if let Err(e) = std::fs::create_dir_all(&user_data) {
@@ -764,6 +801,11 @@ fn start_webview(hwnd: HWND, intro: bool) {
                                 if let Ok(c4) = ctrl.cast::<ICoreWebView2Controller4>() {
                                     let _ = c4.SetAllowExternalDrop(false);
                                 }
+                                // 光关掉还不够：WebView2 的窗口树里可能已经有自己的拖放
+                                // 目标，OLE 命中它就不会再往父窗口找 —— 表现就是拖到窗口上
+                                // 只有一个"禁止"光标。把整棵子窗口树的目标都换成我们的。
+                                let n = attach_drop_to_tree(HWND(hwnd_raw), &drop_target);
+                                crate::log::debug(&format!("拖放目标已挂到 {n} 个窗口"));
                                 // 桥必须在导航前挂好：脚本注入是针对"之后创建的文档"。
                                 if let Err(e) = ipc::attach(&webview, HWND(hwnd_raw)) {
                                     eprintln!("[ui] 桥接挂载失败: {e}");
