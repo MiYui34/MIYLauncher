@@ -88,7 +88,22 @@ const CHUNK_MIN: u64 = 256 << 10;
 const CHUNK_MAX: u64 = 8 << 20;
 
 /// 单个文件最多几条并发连接。镜像按单文件并发限速，超了就是 429。
+///
+/// 但「限速」是按连接算的：实测同一个 41 MB 的客户端 jar，1 条连接
+/// 61 KB/s、8 条连接 4.4 MB/s（镜像和官方都是这个规律）。所以小文件
+/// 保持 2 条（请求数少、不容易 429），大文件放开到 8 条 —— 真被限流了
+/// 会走 `serial` 降级，退回一次一块。
 const PER_FILE_MAX: usize = 2;
+const PER_FILE_MAX_BIG: usize = 8;
+const BIG_FILE: u64 = 16 << 20;
+
+fn per_file_max(size: u64) -> usize {
+    if size >= BIG_FILE {
+        PER_FILE_MAX_BIG
+    } else {
+        PER_FILE_MAX
+    }
+}
 
 /// 单块最多试几次（含第一次）。
 const RETRIES: usize = 8;
@@ -376,9 +391,18 @@ struct Bucket {
     limit: u32,
 }
 
-static BUCKET: Mutex<Bucket> = Mutex::new(Bucket { tokens: 10, reset_at: 0, limit: 10 });
+/// 每个站点一份令牌桶。
+///
+/// 以前是全局一份：镜像回一句「剩余 0，60 秒后重置」，连官方源
+/// （libraries.minecraft.net / piston-data）的请求也一起排队 —— 实测装一个
+/// 新版本 77 个文件被拖成 8 分钟，日志里每 60 秒才落一个文件。额度是
+/// **按站点**算的，官方源根本不该受镜像的牵连。
+fn buckets() -> &'static Mutex<std::collections::HashMap<String, Bucket>> {
+    static M: OnceLock<Mutex<std::collections::HashMap<String, Bucket>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
 
-fn note_rl(v: &Value) {
+fn note_rl(url: &str, v: &Value) {
     let pair = |k: &str| -> Option<(u32, u32)> {
         let a = v.get(k)?.as_array()?;
         Some((a.first()?.as_u64()? as u32, a.get(1)?.as_u64()? as u32))
@@ -397,7 +421,12 @@ fn note_rl(v: &Value) {
     }
     // 短窗口才是真正卡人的那个：直接照抄服务器的剩余量。
     if let Some((rem, reset)) = s {
-        if let Ok(mut b) = BUCKET.lock() {
+        if let Ok(mut m) = buckets().lock() {
+            let b = m.entry(host_of(url)).or_insert(Bucket {
+                tokens: 10,
+                reset_at: 0,
+                limit: 10,
+            });
             b.tokens = rem;
             b.reset_at = now_ms() + reset as u64 * 1000;
         }
@@ -408,20 +437,24 @@ fn note_rl(v: &Value) {
 ///
 /// BMCLAPI 的短窗口是「10 次 / 15 秒」，长窗口「1000 次 / 约 55 分钟」。盲撞的话
 /// 每个块都要吃 429、白等几十秒；照着额度排队，同样的文件能快好几倍。
-fn rl_wait() {
+fn rl_wait(url: &str) {
+    let host = host_of(url);
     loop {
-        let Ok(mut b) = BUCKET.lock() else { return };
-        let now = now_ms();
-        if now >= b.reset_at {
-            b.tokens = b.limit;
-            b.reset_at = now + 60_000;
-        }
-        if b.tokens > 0 {
-            b.tokens -= 1;
-            return;
-        }
-        let wait = b.reset_at.saturating_sub(now).clamp(50, 2_000);
-        drop(b);
+        let wait = {
+            let Ok(mut m) = buckets().lock() else { return };
+            // 没自报过额度的站点（官方源、自建 CDN）不排队。
+            let Some(b) = m.get_mut(&host) else { return };
+            let now = now_ms();
+            if now >= b.reset_at {
+                b.tokens = b.limit;
+                b.reset_at = now + 60_000;
+            }
+            if b.tokens > 0 {
+                b.tokens -= 1;
+                return;
+            }
+            b.reset_at.saturating_sub(now).clamp(50, 2_000)
+        };
         std::thread::sleep(Duration::from_millis(wait));
     }
 }
@@ -874,9 +907,10 @@ pub fn run(
                         if s.state() != ST_PENDING || s.job.size == 0 {
                             continue;
                         }
-                        // 同一个文件最多 2 条连接：镜像节点是按「单文件并发」限速的，
-                        // 4 条一起打同一个 40 MB 的 jar 就会 429（实测）。
-                        if s.left.load(Ordering::Relaxed) >= PER_FILE_MAX {
+                        // 同一个文件最多几条连接：小文件 2 条，大文件 8 条。
+                        // 镜像节点是按「单文件并发」限速的，但限的是每条连接，
+                        // 所以大文件多开几条才跑得满带宽；真 429 了会走 serial。
+                        if s.left.load(Ordering::Relaxed) >= per_file_max(s.job.size) {
                             continue;
                         }
                         // 被限流过的文件改成串行：一次只跑一块，块也放大到 8 MiB，
@@ -933,7 +967,7 @@ pub fn run(
                         let src = s.src.load(Ordering::Relaxed);
                         let url = crate::pick_url(&job.urls, src + attempt);
                         throttle_wait(url);
-                        rl_wait();
+                        rl_wait(url);
                         let req = json!({
                             "url": url,
                             "path": s.part.to_string_lossy(),
@@ -943,7 +977,7 @@ pub fn run(
                         });
                         match call_json(cell.h(), "miy.net.download_range", &req) {
                             Ok(v) if v.get("ok").and_then(Value::as_bool) == Some(true) => {
-                                note_rl(&v);
+                                note_rl(url, &v);
                                 // 宿主说成功还不够：写进去的字节数必须等于这一块的长度。
                                 // 否则预分配留下的 0 会变成文件里的洞，而 size 校验恒真、看不出来。
                                 let wrote = v.get("bytes").and_then(Value::as_u64);
@@ -974,7 +1008,7 @@ pub fn run(
                                 break;
                             }
                             Ok(v) => {
-                                note_rl(&v);
+                                note_rl(url, &v);
                                 let e = parse_error(&v);
                                 if e.kind == Kind::NoRange {
                                     // 这个源不认 Range（实测某个节点对 Range 请求回 200 整包）：

@@ -1609,13 +1609,15 @@ fn candidates_for(it: &Item) -> Vec<String> {
             }
         }
     }
-    // 客户端 jar：官方地址是 piston-data 的 `objects/<sha1>/client.jar`，
-    // 镜像挂了就靠它（41 MB 的大文件，镜像一抽风整次安装就废）。
+    // 客户端 jar：官方地址是 piston-data 的 `objects/<sha1>/client.jar`。
+    // **排在最前面**：41 MB 的文件要开 8 条连接分段，而镜像按节点限流
+    // （实测 8 条并发打同一个 client 会连续 429，白等一分钟），官方 CDN
+    // 没有这个限制（实测 8 条并发 3.2 MB/s）。镜像留作兜底。
     if it.path.starts_with("versions/") && it.path.ends_with(".jar") {
         if let Some(sha) = &it.sha1 {
             let o = format!("https://piston-data.mojang.com/v1/objects/{sha}/client.jar");
             if !out.iter().any(|u| u == &o) {
-                out.push(o);
+                out.insert(0, o);
             }
         }
     }
@@ -7738,9 +7740,10 @@ mod source_tests {
         assert!(c2.iter().any(|u| u == &a), "缺 /maven 回退：{c2:?}");
     }
 
-    /// 客户端 jar 必须有官方兜底：镜像一抽风，41 MB 的大文件会让整次安装失败。
+    /// 客户端 jar 必须有官方地址，而且**排第一**：41 MB 要开 8 条连接分段，
+    /// 镜像按节点限流会连续 429（实测白等一分钟），官方 CDN 没有这个限制。
     #[test]
-    fn client_jar_has_official_fallback() {
+    fn client_jar_prefers_official() {
         let sha = "e877b6a07acd633fb3bb475002175cec036e7b87";
         let it = Item {
             path: "versions/26.3/26.3.jar".into(),
@@ -7750,9 +7753,10 @@ mod source_tests {
         };
         let c = candidates_for(&it);
         let want = format!("https://piston-data.mojang.com/v1/objects/{sha}/client.jar");
-        assert!(c.iter().any(|u| u == &want), "缺官方兜底：{c:?}");
-        // 镜像仍然排第一：官方只是兜底，不是首选。
-        assert!(c[0].starts_with(BMCLAPI), "镜像应排第一：{c:?}");
+        assert!(c.iter().any(|u| u == &want), "缺官方地址：{c:?}");
+        assert_eq!(c[0], want, "官方应排第一：{c:?}");
+        // 镜像仍然在候选里兜底。
+        assert!(c.iter().any(|u| u.starts_with(BMCLAPI)), "缺镜像兜底：{c:?}");
     }
 
     /// 模组接口先走 MCIM，官方源第二，自建中转最后兜底。
