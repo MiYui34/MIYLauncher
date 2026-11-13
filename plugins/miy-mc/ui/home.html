@@ -469,6 +469,9 @@
 
   function pickVersion(id) {
     versionId = id;
+    // 记住选的是哪个：切到别的页面再回来时 iframe 会重新加载，
+    // 不落盘的话下拉框会跳回第一个版本。
+    miy.call("miy.mc.state.set", { key: "home.version", value: id }).catch(() => {});
     const v = versions.find(x => x.id === id);
     if (!v) return;
     $("#verno").textContent = v.id;
@@ -546,7 +549,13 @@
       note: (v.mc && v.mc !== v.id ? "MC " + v.mc + " " : "") +
         (v.loader && v.loader !== "原版" ? v.loader : "正式版"),
     }));
-    versionId = versions[0].id;
+    // 上次选的那个版本还在就接着用它，否则退回第一个。
+    let saved = "";
+    try {
+      const st = await miy.call("miy.mc.state.get", { key: "home.version" });
+      saved = (st && st.value) || "";
+    } catch (e) { saved = ""; }
+    versionId = versions.some(v => v.id === saved) ? saved : versions[0].id;
     dd($("#verdd"), items, versionId, pickVersion);
     pickVersion(versionId);
     // 下拉常显：一个版本时也留着，方便看清"现在选的是哪个"

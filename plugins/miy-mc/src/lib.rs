@@ -1777,6 +1777,60 @@ fn field<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
 
 // ---- 游戏目录（.minecraft）：可以登记多个，和 PCL2 一样 ---------------------
 
+/// 界面状态（比如首页选中的版本）：存在数据目录的 config 里。
+///
+/// 为什么需要它：切到别的页面时外壳会把 iframe 从 DOM 上摘下来，再切回来
+/// 浏览器会重新加载 `srcdoc`，页面里的变量全丢 —— 用户选好的版本就跳回第一个。
+/// 这类"用户选了什么"必须落到磁盘上，回来时才接得上。
+fn ui_state_file(h: &MiyHostV1) -> Option<std::path::PathBuf> {
+    let info = call_json(h, "miy.app.info", &json!({})).ok()?;
+    let data = info.get("dataRoot").and_then(Value::as_str)?;
+    Some(std::path::Path::new(data).join("config").join("ui-state.json"))
+}
+
+fn service_state_get(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
+    let key = field(req, "key").unwrap_or("");
+    let v = ui_state_file(h)
+        .and_then(|f| std::fs::read(f).ok())
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .unwrap_or(Value::Null);
+    Ok(json!({"ok": true, "value": v.get(key).cloned().unwrap_or(Value::Null)})
+        .to_string()
+        .into_bytes())
+}
+
+fn service_state_set(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
+    let key = field(req, "key").unwrap_or("");
+    if key.is_empty() {
+        return Ok(json!({"ok": false, "error": "缺少 key"}).to_string().into_bytes());
+    }
+    let Some(file) = ui_state_file(h) else {
+        return Ok(json!({"ok": false, "error": "拿不到数据目录"}).to_string().into_bytes());
+    };
+    let mut v = std::fs::read(&file)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .unwrap_or_else(|| json!({}));
+    if !v.is_object() {
+        v = json!({});
+    }
+    if let Some(o) = v.as_object_mut() {
+        o.insert(
+            key.to_string(),
+            req.get("value").cloned().unwrap_or(Value::Null),
+        );
+    }
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match std::fs::write(&file, serde_json::to_vec_pretty(&v).unwrap_or_default()) {
+        Ok(()) => Ok(json!({"ok": true}).to_string().into_bytes()),
+        Err(e) => Ok(json!({"ok": false, "error": format!("写入失败：{e}")})
+            .to_string()
+            .into_bytes()),
+    }
+}
+
 /// 登记过的 `.minecraft` 目录清单，存在数据目录的 config 里。
 fn roots_file(h: &MiyHostV1) -> Option<std::path::PathBuf> {
     let info = call_json(h, "miy.app.info", &json!({})).ok()?;
@@ -7480,6 +7534,8 @@ unsafe fn dispatch_inner(
         "miy.mc.versions" => service_versions(&st.host),
         "miy.mc.manifest.refresh" => service_manifest_refresh(&st.host),
         "miy.mc.installed" => service_installed(&st.host, &req),
+        "miy.mc.state.get" => service_state_get(&st.host, &req),
+        "miy.mc.state.set" => service_state_set(&st.host, &req),
         "miy.mc.roots" => service_roots(&st.host, &req),
         "miy.mc.root.add" => service_root_add(&st.host, &req),
         "miy.mc.root.remove" => service_root_remove(&st.host, &req),
