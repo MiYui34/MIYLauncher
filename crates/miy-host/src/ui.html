@@ -290,6 +290,32 @@ iframe.plugpage{
   background:transparent; display:block; color-scheme:light;
 }
 
+/* ---------- 拖放整合包 ----------
+   文件从资源管理器拖进来时，宿主推 drop.enter / drop.leave / drop 三个事件。
+   提示层要盖住整个窗口（含左侧导航），所以是 fixed 全屏。 */
+#dropzone{
+  position:fixed; inset:0; z-index:120; display:none; place-items:center;
+  background:rgba(65,95,145,.18); backdrop-filter:blur(2px);
+}
+#dropzone.show{display:grid}
+#dropzone .box{
+  border:2px dashed var(--primary); border-radius:20px; padding:34px 46px;
+  background:rgba(249,249,255,.92); color:var(--on-surface); text-align:center;
+  box-shadow:0 12px 40px rgba(16,24,40,.18);
+}
+#dropzone .box b{display:block; font:600 17px/24px var(--font); margin-bottom:6px}
+#dropzone .box span{font:400 13px/20px var(--font); color:var(--on-var)}
+#dropcard{
+  position:fixed; right:22px; bottom:86px; z-index:110; width:300px; display:none;
+  background:var(--surface-lowest); border-radius:16px; padding:14px 16px;
+  box-shadow:0 8px 28px rgba(16,24,40,.18);
+}
+#dropcard.show{display:block}
+#dropcard .t{font:600 13px/20px var(--font); margin-bottom:8px}
+#dropcard .bar{height:6px; border-radius:3px; background:var(--surface-high); overflow:hidden}
+#dropcard .bar i{display:block; height:100%; width:0; background:var(--primary); transition:width .2s linear}
+#dropcard .s{margin-top:6px; font:400 12px/18px var(--font); color:var(--on-var)}
+
 /* ---------- snackbar ---------- */
 #snack{
   position:fixed; left:calc(50% + 46px); bottom:22px; transform:translate(-50%,16px) scale(.98);
@@ -399,6 +425,12 @@ iframe.plugpage{
 </button>
 <div class="tasks" id="tasks" hidden></div>
 <div id="snack"></div>
+<div id="dropzone"><div class="box"><b>松开即可安装整合包</b><span>支持 Modrinth 的 .mrpack</span></div></div>
+<div id="dropcard">
+  <div class="t" id="dropTitle">正在安装整合包…</div>
+  <div class="bar"><i id="dropBar"></i></div>
+  <div class="s" id="dropState">准备中</div>
+</div>
 
 <script>
 "use strict";
@@ -1051,6 +1083,40 @@ function applyDensity(v) {
   document.body.classList.toggle("compact", v === "compact");
 }
 
+/* ---------- 拖放整合包 ----------
+   宿主在父窗口上接了 OLE 拖放目标（WebView2 里拿不到 File.path），
+   这里只负责画提示层、把路径交给插件、把进度画出来。 */
+const dropzone = $("#dropzone");
+const dropcard = $("#dropcard");
+let dropBusy = false;
+
+function dropShow(on) {
+  dropzone.classList.toggle("show", !!on);
+}
+
+async function dropImport(path) {
+  if (dropBusy) return;
+  dropBusy = true;
+  dropcard.classList.add("show");
+  $("#dropTitle").textContent = "正在安装整合包…";
+  $("#dropBar").style.width = "0%";
+  $("#dropState").textContent = "读取整合包…";
+  try {
+    const r = await miy.call("miy.mc.import", { path }, 3600000);
+    if (!r || r.ok === false) throw new Error((r && r.error) || "安装失败");
+    $("#dropBar").style.width = "100%";
+    $("#dropState").textContent = "完成";
+    snack("整合包已安装：" + (r.name || ""), "");
+    showView("page:miy.mc/versions");
+  } catch (e) {
+    $("#dropState").textContent = "失败";
+    snack(e.message || "安装失败", "err");
+  } finally {
+    dropBusy = false;
+    setTimeout(() => dropcard.classList.remove("show"), 2500);
+  }
+}
+
 /* ---------- 事件 ---------- */
 if (!window.miy) {
   document.getElementById("view").textContent =
@@ -1059,6 +1125,24 @@ if (!window.miy) {
   broadcastEvent(topic, payload);
 
   if (topic === "host.error") snack(payload || "发生错误", "err");
+  if (topic === "drop.enter") dropShow(true);
+  if (topic === "drop.leave") dropShow(false);
+  if (topic === "drop") {
+    dropShow(false);
+    const paths = (payload && payload.paths) || [];
+    if (paths.length) dropImport(paths[0]);
+  }
+  if (topic === "mc.progress" && dropBusy && payload) {
+    const total = payload.totalBytes || 0;
+    const bytes = payload.bytes || 0;
+    const pct = total > 0
+      ? Math.min(100, Math.round(bytes * 100 / total))
+      : (payload.total ? Math.round(payload.done * 100 / payload.total) : 0);
+    $("#dropBar").style.width = pct + "%";
+    $("#dropState").textContent = total > 0
+      ? (bytes / 1048576).toFixed(1) + " / " + (total / 1048576).toFixed(1) + " MB"
+      : payload.done + " / " + payload.total;
+  }
   if (topic === "settings.changed" && payload && payload.key === "core.ui.density") applyDensity(payload.value);
   if ((topic === "plugin.loaded" || topic === "plugin.failed" || topic === "plugins.loaded") && view === "plugins") {
     clearTimeout(refreshT);

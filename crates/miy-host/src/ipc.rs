@@ -275,6 +275,13 @@ pub fn drain() {
     });
 }
 
+/// 把一条事件推给页面（宿主自己产生的事件，比如拖放）。
+pub fn push_event(topic: &str, payload: serde_json::Value) {
+    push_out(
+        serde_json::json!({ "type": "event", "topic": topic, "payload": payload }).to_string(),
+    );
+}
+
 /// 把总线里攒着的事件推给页面。这条路用于插件的 `emit`。
 pub fn flush_events() {
     for (topic, payload) in bus::get().drain_events(64) {

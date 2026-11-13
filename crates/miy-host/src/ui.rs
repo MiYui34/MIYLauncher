@@ -53,6 +53,129 @@ use webview2_com::{
 
 use crate::{ipc, paths, settings};
 
+// ---- 拖放：把整合包拖进窗口就装 -------------------------------------------
+//
+// 为什么要在宿主这边接：WebView2 里 `File.path` 永远是 undefined（拿不到真实
+// 路径），而安装整合包必须知道路径。所以关掉 WebView2 自己的外部拖放
+// （`AllowExternalDrop = false`），在父窗口上注册一个 OLE 拖放目标 —— 子窗口
+// 没有目标时 OLE 会沿父链往上找，正好落到我们这里。
+//
+// 顺带的好处：`DragEnter` / `DragLeave` 能让我们在页面上画那层半透明提示，
+// 而 `WM_DROPFILES` 只有落下那一刻才知道。
+
+use windows::core::{implement, Ref};
+use windows::Win32::Foundation::POINTL;
+use windows::Win32::System::Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL};
+use windows::Win32::System::Ole::{
+    OleInitialize, OleUninitialize, RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop, CF_HDROP,
+    DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE, IDropTarget, IDropTarget_Impl,
+};
+use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
+use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
+
+/// 拖放目标。无状态：它只负责把"有东西进来了 / 走了 / 落下了"转成页面事件。
+#[implement(IDropTarget)]
+struct DropTarget;
+
+impl IDropTarget_Impl for DropTarget_Impl {
+    fn DragEnter(
+        &self,
+        pdataobj: Ref<IDataObject>,
+        _keys: MODIFIERKEYS_FLAGS,
+        _pt: &POINTL,
+        effect: *mut DROPEFFECT,
+    ) -> windows::core::Result<()> {
+        let ok = !drop_files(pdataobj.as_ref()).is_empty();
+        unsafe {
+            *effect = if ok { DROPEFFECT_COPY } else { DROPEFFECT_NONE };
+        }
+        if ok {
+            ipc::push_event("drop.enter", serde_json::json!({}));
+        }
+        Ok(())
+    }
+
+    fn DragOver(
+        &self,
+        _keys: MODIFIERKEYS_FLAGS,
+        _pt: &POINTL,
+        effect: *mut DROPEFFECT,
+    ) -> windows::core::Result<()> {
+        unsafe {
+            *effect = DROPEFFECT_COPY;
+        }
+        Ok(())
+    }
+
+    fn DragLeave(&self) -> windows::core::Result<()> {
+        ipc::push_event("drop.leave", serde_json::json!({}));
+        Ok(())
+    }
+
+    fn Drop(
+        &self,
+        pdataobj: Ref<IDataObject>,
+        _keys: MODIFIERKEYS_FLAGS,
+        _pt: &POINTL,
+        effect: *mut DROPEFFECT,
+    ) -> windows::core::Result<()> {
+        let paths = drop_files(pdataobj.as_ref());
+        unsafe {
+            *effect = if paths.is_empty() {
+                DROPEFFECT_NONE
+            } else {
+                DROPEFFECT_COPY
+            };
+        }
+        ipc::push_event("drop", serde_json::json!({ "paths": paths }));
+        Ok(())
+    }
+}
+
+/// 从拖放数据里取出文件路径（`CF_HDROP`）。
+fn drop_files(data: Option<&IDataObject>) -> Vec<String> {
+    let Some(data) = data else {
+        return Vec::new();
+    };
+    let fmt = FORMATETC {
+        cfFormat: CF_HDROP.0,
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0 as u32,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    };
+    unsafe {
+        let Ok(medium) = data.GetData(&fmt) else {
+            return Vec::new();
+        };
+        let out = hdrop_paths(HDROP(medium.u.hGlobal.0));
+        let mut medium = medium;
+        ReleaseStgMedium(&mut medium);
+        out
+    }
+}
+
+/// 从一个 `HDROP` 里读出所有路径。单独拆出来是为了能直接测：
+/// 造一个 `DROPFILES` 内存块就能验，不用真的拖一次。
+fn hdrop_paths(hdrop: HDROP) -> Vec<String> {
+    unsafe {
+        let count = DragQueryFileW(hdrop, u32::MAX, None);
+        let mut out = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            let len = DragQueryFileW(hdrop, i, None);
+            if len == 0 {
+                continue;
+            }
+            let mut buf = vec![0u16; len as usize + 1];
+            let got = DragQueryFileW(hdrop, i, Some(&mut buf));
+            if got > 0 {
+                out.push(String::from_utf16_lossy(&buf[..got as usize]));
+            }
+        }
+        out
+    }
+}
+
 const TIMER_DRAIN: usize = 1;
 
 /// 缩放边宽度。WebView2 是独立子窗口，会吞掉自己范围内的鼠标消息，
@@ -383,6 +506,8 @@ fn show_main(hwnd: HWND) {
 pub fn run(probe: bool) -> i32 {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        // OLE 拖放要求线程先初始化 OLE（`RegisterDragDrop` 会失败在没初始化的线程上）。
+        let _ = OleInitialize(None);
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
 
@@ -455,6 +580,13 @@ pub fn run(probe: bool) -> i32 {
         };
         let _ = WINDOW.set(hwnd.0 as isize);
 
+        // 拖放目标挂在父窗口上：WebView2 子窗口关掉外部拖放后，OLE 会沿父链
+        // 找到这里。注册失败不影响启动，只是拖不进来。
+        let drop_target: IDropTarget = DropTarget.into();
+        if let Err(e) = RegisterDragDrop(hwnd, Some(&drop_target)) {
+            crate::log::warn(&format!("注册拖放目标失败：{e}"));
+        }
+
         // 有记过位置就还原，没有就用居中那套。
         if let Some(p) = load_placement() {
             let _ = SetWindowPlacement(hwnd, &p);
@@ -512,11 +644,24 @@ pub fn run(probe: bool) -> i32 {
             });
         }
 
+        // `--drop-test <路径>`：把"拖进来"这件事在宿主侧重放一遍（提示层 → 安装），
+        // 用来验收拖放链路。真实拖放走的是同一个事件通道，只是入口换成 OLE。
+        if let Some(path) = crate::arg_value("--drop-test") {
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(2500));
+                ipc::push_event("drop.enter", serde_json::json!({}));
+                std::thread::sleep(std::time::Duration::from_millis(900));
+                ipc::push_event("drop", serde_json::json!({ "paths": [path] }));
+            });
+        }
+
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        let _ = RevokeDragDrop(hwnd);
+        OleUninitialize();
         0
     }
 }
@@ -613,6 +758,11 @@ fn start_webview(hwnd: HWND, intro: bool) {
                                     {
                                         let _ = s3.SetAreBrowserAcceleratorKeysEnabled(false);
                                     }
+                                }
+                                // 拖进来的文件交给宿主处理（见文件头的 DropTarget）：
+                                // 开着的话 WebView2 会把它当导航/下载，正是用户抱怨的那个行为。
+                                if let Ok(c4) = ctrl.cast::<ICoreWebView2Controller4>() {
+                                    let _ = c4.SetAllowExternalDrop(false);
                                 }
                                 // 桥必须在导航前挂好：脚本注入是针对"之后创建的文档"。
                                 if let Err(e) = ipc::attach(&webview, HWND(hwnd_raw)) {
@@ -889,6 +1039,55 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }
+}
+
+#[cfg(test)]
+mod drop_tests {
+    use super::*;
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Foundation::GlobalFree;
+    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+
+    /// `DROPFILES` 头（20 字节）：偏移、鼠标位置、是否非客户区、是否宽字符。
+    #[repr(C)]
+    struct DropFiles {
+        p_files: u32,
+        pt: POINT,
+        f_nc: windows::core::BOOL,
+        f_wide: windows::core::BOOL,
+    }
+
+    #[test]
+    fn reads_paths_from_hdrop() {
+        let paths = ["C:\\a\\b.mrpack", "D:\\中文 目录\\c.zip"];
+        let mut wide: Vec<u16> = Vec::new();
+        for p in paths {
+            wide.extend(p.encode_utf16());
+            wide.push(0);
+        }
+        wide.push(0);
+
+        let head = std::mem::size_of::<DropFiles>();
+        unsafe {
+            let h = GlobalAlloc(GMEM_MOVEABLE, head + wide.len() * 2).expect("alloc");
+            let base = GlobalLock(h) as *mut u8;
+            let df = DropFiles {
+                p_files: head as u32,
+                pt: POINT { x: 0, y: 0 },
+                f_nc: false.into(),
+                f_wide: true.into(),
+            };
+            std::ptr::copy_nonoverlapping(&df as *const _ as *const u8, base, head);
+            std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, base.add(head), wide.len() * 2);
+            let _ = GlobalUnlock(h);
+
+            let got = hdrop_paths(HDROP(h.0));
+            let want: Vec<String> = paths.iter().map(|s| s.to_string()).collect();
+            assert_eq!(got, want);
+
+            let _ = GlobalFree(Some(h));
         }
     }
 }

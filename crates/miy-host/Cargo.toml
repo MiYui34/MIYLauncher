@@ -16,12 +16,18 @@ miy-mc = { workspace = true }
 serde_json = "1"
 flate2 = { workspace = true }
 webview2-com = "0.38"
+# `#[implement]` 生成的代码引用 `::windows_core::…`，得让它能按名字找到。
+windows-core = "0.61"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
     "Win32_System_Console",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_SystemServices",
     "Win32_Networking_WinHttp",
     "Win32_System_LibraryLoader",
     "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_Input_KeyboardAndMouse",

@@ -144,6 +144,7 @@ fn main() {
                 | "--name"
                 | "--login-probe"
                 | "--login-flow"
+                | "--drop-test"
                 | "--help"
                 | "-h"
                 | "--version"
