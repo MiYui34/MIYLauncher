@@ -673,7 +673,7 @@
   // 速度用 2.5 秒滑动窗口算，而不是「两次事件之间」：事件间隔只有 250ms，
   // 抖动极大；而且卡住时根本没有事件，旧写法会把上一次的速度一直挂在界面上。
   let samples = [];          // [{t, bytes}]
-  let lastDone = 0, lastTotal = 1, lastBytes = 0;
+  let lastDone = 0, lastTotal = 1, lastBytes = 0, lastTotalBytes = 0;
   function speedNow() {
     const now = Date.now();
     while (samples.length > 1 && now - samples[0].t > 2500) samples.shift();
@@ -684,12 +684,18 @@
     return Math.max(0, (b.bytes - a.bytes) / 1048576 / dt);
   }
   function paintProgress() {
-    const p1 = Math.min(99, Math.round(lastDone / Math.max(1, lastTotal) * 100));
+    // 有总字节数就按字节画：最后一个大文件（客户端 jar）下载时，文件数早就
+    // 停在 99%，只有字节还在动 —— 按文件画会让人以为卡死了。
+    const byBytes = lastTotalBytes > 0;
+    const frac = byBytes ? lastBytes / lastTotalBytes : lastDone / Math.max(1, lastTotal);
+    const p1 = Math.min(99, Math.round(frac * 100));
     const mbs = speedNow();
     const speed = mbs > 0.05 ? "，" + mbs.toFixed(1) + " MB/s" : "，0.0 MB/s";
+    const size = byBytes
+      ? (lastBytes / 1048576).toFixed(1) + " / " + (lastTotalBytes / 1048576).toFixed(1) + " MB"
+      : (lastBytes / 1048576).toFixed(1) + " MB";
     $("#shbar").style.width = p1 + "%";
-    $("#shprog").textContent = p1 + "%，文件 " + lastDone + " / " + lastTotal + "，"
-      + (lastBytes / 1048576).toFixed(1) + " MB" + speed;
+    $("#shprog").textContent = p1 + "%，文件 " + lastDone + " / " + lastTotal + "，" + size + speed;
   }
   // 没有新事件时也要刷新：卡住的时候速度得自己掉到 0，而不是停在旧值上。
   setInterval(() => { if (busy) paintProgress(); }, 500);
@@ -703,6 +709,7 @@
     lastDone = payload.done || 0;
     lastTotal = payload.total || 1;
     lastBytes = payload.bytes || 0;
+    lastTotalBytes = payload.totalBytes || 0;
     samples.push({ t: Date.now(), bytes: lastBytes });
     if (samples.length > 40) samples.shift();
     paintProgress();

@@ -1693,12 +1693,15 @@ pub(crate) fn fetch_all(
         jobs,
         concurrency,
         cancel,
-        &|b, _t| {
+        &|b, t| {
             let d = done.load(Ordering::Relaxed);
             if let Some(t) = task {
                 task_progress(t, d as u64, b);
             }
-            let payload = format!(r#"{{"done":{d},"total":{total},"bytes":{b}}}"#);
+            // 同时给「文件数」和「字节数」：最后一个大文件（客户端 jar）下载时，
+            // 文件数早就停在 99%，只有字节数还在动 —— 界面按字节画才不会像卡死。
+            let payload =
+                format!(r#"{{"done":{d},"total":{total},"bytes":{b},"totalBytes":{t}}}"#);
             unsafe { cell.h().emit_str("mc.progress", payload.as_bytes()) };
         },
         &|i| {

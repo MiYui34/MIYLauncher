@@ -325,25 +325,30 @@ fn throttles() -> &'static Mutex<std::collections::HashMap<String, u64>> {
     MAP.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
-/// 全局限速闸门：`(下次允许发请求的时刻, 当前惩罚毫秒)`。
+/// 每个站点一份限速闸门：`(下次允许发请求的时刻, 当前惩罚毫秒)`。
 ///
 /// 为什么需要它：镜像按 IP 限流，我们这边几十条连接各自退避、各自重试，只会把
-/// 冷却时间越推越长（实测一次 124 MB 的安装被 429 拖到 8 分钟）。改成所有线程
-/// 共用一个闸门：撞到 429 就把闸门往后推、惩罚翻倍；成功一次就减半。
-fn gate() -> &'static Mutex<(u64, u64)> {
-    static G: OnceLock<Mutex<(u64, u64)>> = OnceLock::new();
-    G.get_or_init(|| Mutex::new((0, 0)))
+/// 冷却时间越推越长（实测一次 124 MB 的安装被 429 拖到 8 分钟）。改成同一站点的
+/// 线程共用一个闸门：撞到 429 就把闸门往后推、惩罚翻倍；成功一次就减半。
+///
+/// **必须按站点分开**：以前是全局一份，镜像回一句「剩余 0，60 秒后重置」，
+/// 连自建 CDN 和官方源的请求也一起冻住 —— 那正是「卡在 99% 不动」的主因。
+fn gates() -> &'static Mutex<std::collections::HashMap<String, (u64, u64)>> {
+    static G: OnceLock<Mutex<std::collections::HashMap<String, (u64, u64)>>> = OnceLock::new();
+    G.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
 fn note_limited(url: &str) {
+    let host = host_of(url);
     if let Ok(mut m) = throttles().lock() {
-        m.insert(host_of(url), now_ms());
+        m.insert(host.clone(), now_ms());
     }
     // 服务器自报了窗口（`Remaining-short: 0` + `Reset-short: 60`）就照它等，
     // 别用指数退避瞎猜：实测盲退避是 5/10/20 秒，而窗口其实是 60 秒，
     // 于是每个块都要白撞 4 次 429 才成功。
     let window = RL.lock().ok().and_then(|r| r.0).filter(|(rem, _)| *rem == 0);
-    if let Ok(mut g) = gate().lock() {
+    if let Ok(mut m) = gates().lock() {
+        let g = m.entry(host).or_insert((0, 0));
         match window {
             Some((_, reset)) => {
                 g.1 = (reset as u64 * 1000).min(60_000);
@@ -357,17 +362,23 @@ fn note_limited(url: &str) {
     }
 }
 
-fn note_ok() {
-    if let Ok(mut g) = gate().lock() {
+fn note_ok(url: &str) {
+    if let Ok(mut m) = gates().lock() {
+        let g = m.entry(host_of(url)).or_insert((0, 0));
         g.1 /= 2;
         g.0 = now_ms() + 40;
     }
 }
 
-/// 等到闸门放行。分段小睡，取消时能及时退出。
-fn throttle_wait(_url: &str) {
+/// 等到这个站点的闸门放行。分段小睡，取消时能及时退出。
+fn throttle_wait(url: &str) {
+    let host = host_of(url);
     loop {
-        let next = gate().lock().map(|g| g.0).unwrap_or(0);
+        let next = gates()
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&host).map(|g| g.0))
+            .unwrap_or(0);
         let now = now_ms();
         if now >= next {
             return;
@@ -644,6 +655,9 @@ struct Slot {
     left: AtomicUsize,
     /// 被限流过：改成一次只跑一块，块也放大 —— 请求数少了才不会被继续 429。
     serial: AtomicBool,
+    /// 第一次撞到 429 的时刻（毫秒）。限流不是文件的错，块会放回队列等窗口；
+    /// 但也不能无限等下去，超过 3 分钟就判失败，免得用户看着 99% 干等。
+    rl_since: AtomicU64,
     /// 已写入的字节数。
     done: AtomicU64,
     /// 最近一次有进展的时刻（毫秒），用来发现「卡死在某个文件上」。
@@ -785,6 +799,7 @@ pub fn run(
             src: AtomicUsize::new(0),
             left: AtomicUsize::new(0),
             serial: AtomicBool::new(false),
+            rl_since: AtomicU64::new(0),
             done: AtomicU64::new(0),
             last_ms: AtomicU64::new(now_ms()),
             last_src: Mutex::new(String::new()),
@@ -948,6 +963,8 @@ pub fn run(
 
                     let mut last: Option<DlError> = None;
                     let mut ok = false;
+                    // 撞到 429 时把这一块放回队列、等窗口重置，而不是判这个文件死刑。
+                    let mut requeued = false;
                     for attempt in 0..RETRIES {
                         // 看门狗或别的线程可能已经判它失败了，别再白试。
                         if s.state() != ST_PENDING {
@@ -997,7 +1014,7 @@ pub fn run(
                                 s.done.fetch_add(len, Ordering::Relaxed);
                                 s.last_ms.store(now_ms(), Ordering::Relaxed);
                                 done_bytes.fetch_add(len, Ordering::Relaxed);
-                                note_ok();
+                                note_ok(url);
                                 // 记下这一块是哪个源给的，排障时一眼看出走的 CDN 还是镜像。
                                 if let Ok(mut src) = s.last_src.lock() {
                                     *src = host_of(url).to_string();
@@ -1024,6 +1041,25 @@ pub fn run(
                                     // 限流是按节点的：短暂退让 + 砍半并发，
                                     // 真正的等待交给 rl_wait()（读服务器给的 Reset-short）。
                                     budget_429(2_000);
+                                    // 限流不是这个文件的错：把这一块放回队首，等窗口重置后重领。
+                                    // 以前这里直接 s.fail()，一个 429 就把整个文件判死 ——
+                                    // 表现就是进度卡在 99%、装完缺文件。
+                                    if let Ok(mut q) = s.pending.lock() {
+                                        q.push_front((off, len));
+                                    }
+                                    let since = s.rl_since.load(Ordering::Relaxed);
+                                    if since == 0 {
+                                        s.rl_since.store(now_ms(), Ordering::Relaxed);
+                                    } else if now_ms().saturating_sub(since) > 180_000 {
+                                        // 等了 3 分钟还在被限流：认输，报清楚原因。
+                                        last = Some(DlError::new(
+                                            Kind::Http(429),
+                                            format!("{} 被限流超过 3 分钟", job.path),
+                                        ));
+                                        break;
+                                    }
+                                    requeued = true;
+                                    break;
                                 }
                                 // 还有别的源就换一个再试：4xx 对当前源是永久的，
                                 // 对下一个源未必（镜像没同步、官方有）。
@@ -1042,7 +1078,7 @@ pub fn run(
                         }
                     }
 
-                    if !ok {
+                    if !ok && !requeued {
                         let e = last.unwrap_or_else(|| DlError::new(Kind::Net, "下载失败"));
                         if e.kind == Kind::NoRange {
                             // 这个文件整体退回单连接，别的块别再试了。
@@ -1194,6 +1230,44 @@ pub fn run(
         match s.state() {
             ST_DONE => done_count += 1,
             ST_PENDING => {
+                // 还有没领完的块（工作线程提前退出了，或者被限流放回了队列）：
+                // 这里用一条连接把剩下的补完，别让用户拿到一个缺文件的版本。
+                let left_ranges: Vec<(u64, u64)> = s
+                    .pending
+                    .lock()
+                    .map(|q| q.iter().copied().collect())
+                    .unwrap_or_default();
+                let mut drained = true;
+                for (off, len) in left_ranges {
+                    let src = s.src.load(Ordering::Relaxed);
+                    let url = crate::pick_url(&s.job.urls, src);
+                    let req = json!({
+                        "url": url,
+                        "path": s.part.to_string_lossy(),
+                        "offset": off,
+                        "length": len,
+                        "timeout_ms": 60_000u64
+                    });
+                    match call_json(cell.h(), "miy.net.download_range", &req) {
+                        Ok(v) if v.get("ok").and_then(Value::as_bool) == Some(true) => {
+                            if let Ok(mut q) = s.pending.lock() {
+                                q.retain(|&(o, l)| !(o == off && l == len));
+                            }
+                            s.done.fetch_add(len, Ordering::Relaxed);
+                            done_bytes.fetch_add(len, Ordering::Relaxed);
+                            append_journal(&s.journal, off, len);
+                        }
+                        _ => {
+                            drained = false;
+                            break;
+                        }
+                    }
+                }
+                if !drained {
+                    s.fail(format!("{} 还有块没下完", s.job.path));
+                    let _ = std::fs::remove_file(&s.part);
+                    continue;
+                }
                 // 理论上不该出现（块都领完了），保险起见再校验一次。
                 match finalize(s) {
                     Ok(()) => {
@@ -1244,6 +1318,8 @@ mod tests {
         cancel: AtomicUsize,
         /// 前 N 次 Range 请求只写一半字节（模拟服务器截断）。
         short_first: AtomicUsize,
+        /// 前 N 次 Range 请求回 429（模拟镜像限流）。
+        rl_first: AtomicUsize,
     }
 
     unsafe extern "C" fn fake_alloc(_ctx: *mut std::ffi::c_void, size: usize) -> *mut u8 {
@@ -1292,6 +1368,8 @@ mod tests {
         let resp = if svc == "miy.net.download_range" {
             if c.norange.load(Ordering::SeqCst) {
                 json!({"ok": false, "kind": "norange", "status": 200, "error": "服务器不支持分段下载"})
+            } else if n <= c.rl_first.load(Ordering::SeqCst) {
+                json!({"ok": false, "kind": "http", "status": 429, "error": "HTTP 429"})
             } else if n <= c.fail_first.load(Ordering::SeqCst) {
                 json!({"ok": false, "kind": "http", "status": 503, "error": "HTTP 503"})
             } else {
@@ -1356,7 +1434,33 @@ mod tests {
             cancel_after: AtomicUsize::new(0),
             cancel: AtomicUsize::new(0),
             short_first: AtomicUsize::new(0),
+            rl_first: AtomicUsize::new(0),
         }
+    }
+
+    #[test]
+    fn rate_limited_chunks_are_retried_not_failed() {
+        let d = tmpdir("rl");
+        let src = d.join("src.bin");
+        let data: Vec<u8> = (0..(1 << 20)).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&src, &data).unwrap();
+        let c = ctx(&src);
+        // 前两次请求被限流。以前这里直接 s.fail()，一个 429 就把整个文件判死，
+        // 表现就是进度卡在 99%、装完缺文件；现在应该把块放回队列、等窗口重领。
+        c.rl_first.store(2, Ordering::SeqCst);
+        let h = host(&c);
+        let out = d.join("out.bin");
+        let jobs = vec![Job {
+            // 用独立域名，免得和别的测试共用同一个限速闸门。
+            urls: vec!["http://rl.test/x".into()],
+            path: out.to_string_lossy().into(),
+            size: data.len() as u64,
+            sha1: None,
+        }];
+        let rep = run(&h, jobs, 4, None, &|_, _| {}, &|_| {});
+        assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+        assert_eq!(rep.done, 1);
+        assert_eq!(std::fs::read(&out).unwrap(), data);
     }
 
     #[test]
