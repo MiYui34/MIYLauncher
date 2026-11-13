@@ -114,11 +114,14 @@
     position:relative; overflow:hidden;
   }
   .ava.on{background:var(--primary); color:#fff}
-  /* 皮肤是 64x64 的图，头部在 (8,8) 的 8x8 方块里；36px 头像按 4.5 倍放大后
-     背景图铺成 288px，偏移 -36px 正好把头部对准。帽子层在 (40,8)。
-     按用户要求：方形、不切角，整颗头完整显示。 */
-  .ava.skin{background-color:#c9d3e6; background-size:288px 288px; background-position:-36px -36px;
-    background-repeat:no-repeat; image-rendering:pixelated; color:transparent; border-radius:0}
+  /* 皮肤头像：和 PCL 一样用两层 2D 图叠出来 —— 底层是头（8,8 的 8x8 方块），
+     上层是帽子（40,8），再给整颗头一点投影，看起来才有厚度。
+     皮肤是 64x64 的图，36px 头像按 4.5 倍放大，背景图铺成 288px。 */
+  .ava.skin{
+    background-color:#c9d3e6; background-size:288px 288px; background-position:-36px -36px;
+    background-repeat:no-repeat; image-rendering:pixelated; color:transparent; border-radius:0;
+    filter:drop-shadow(0 1px 1.5px rgba(16,24,40,.35));
+  }
   .ava.skin::after{
     content:""; position:absolute; inset:0;
     background-image:inherit; background-size:288px 288px; background-position:-180px -36px;

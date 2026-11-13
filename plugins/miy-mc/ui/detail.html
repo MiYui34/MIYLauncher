@@ -230,7 +230,6 @@
 
     <div class="row"><span class="k">客户端</span><span class="v" id="vjar">—</span></div>
     <div class="row"><span class="k">Java</span><span class="v" id="vjava">—</span></div>
-    <div class="row"><span class="k">发布时间</span><span class="v" id="vdate">—</span></div>
     <div class="row" id="loaderRow" hidden>
       <span class="k">模组加载器</span>
       <span class="v" id="loaderHint">原版，装进去的模组不会被加载</span>
@@ -460,7 +459,6 @@
     $("#mpath").textContent = root ? root + "\\versions\\" + info.id + "\\mods" : "—";
     $("#vjar").textContent = info.jar ? mb(info.jar) : "缺少客户端文件";
     $("#vjava").textContent = info.java ? "Java " + info.java : "跟随默认";
-    $("#vdate").textContent = info.released ? info.released.slice(0, 10) : "—";
     fillChips(info);
     // 原版版本里装模组是不会被加载的，给一个就地装加载器的入口。
     $("#loaderRow").hidden = (info.loader || "原版") !== "原版";

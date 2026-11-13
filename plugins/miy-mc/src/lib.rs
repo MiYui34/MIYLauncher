@@ -5600,7 +5600,9 @@ fn service_export(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    // 玩家在「另存为」里挑过路径就用他的，否则落到 <游戏目录>\exports。
+    // 玩家在「另存为」里挑过路径就用他的，否则落到 <数据目录>\pack。
+    // 放数据目录而不是游戏目录：整合包是"要发给别人"的东西，不该混在存档旁边，
+    // 而且换游戏目录后还能找到上次导出的包。
     let out = match field(req, "dest").map(str::trim).filter(|s| !s.is_empty()) {
         Some(dest) => {
             let p = std::path::PathBuf::from(dest);
@@ -5612,7 +5614,11 @@ fn service_export(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
             p
         }
         None => {
-            let out_dir = std::path::Path::new(&root).join("exports");
+            let data = call_json(h, "miy.app.info", &json!({}))
+                .ok()
+                .and_then(|v| v.get("dataRoot").and_then(Value::as_str).map(str::to_string))
+                .unwrap_or_else(|| root.clone());
+            let out_dir = std::path::Path::new(&data).join("pack");
             std::fs::create_dir_all(&out_dir).map_err(|e| format!("无法创建导出目录：{e}"))?;
             out_dir.join(format!("{id}-{stamp}.mrpack"))
         }
