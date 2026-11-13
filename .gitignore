@@ -22,6 +22,8 @@
 /scripts/shot_admin_live.py
 /scripts/test_admin.py
 /scripts/extract-crash-rules.py
+/scripts/publish-clients.py
+/scripts/list-cdn.py
 
 # ---- 内部文档（含服务器地址、桶与隧道信息）----
 /docs/backend-requirements.md
