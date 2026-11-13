@@ -1461,8 +1461,23 @@ fn register_host_services() {    let b = bus::get();
             Err(e) => json!({ "ok": false, "error": e }).to_string().into_bytes(),
         }
     });
-    b.register_host_service("miy.app.pickFolder", |req| {
+    // 「另存为」：导出整合包时让玩家自己挑位置和文件名。
+    // 和 pickFile 的区别是它允许输入一个还不存在的路径。
+    b.register_host_service("miy.app.saveFile", |req| {
         let title = field_of(req, "title");
+        let title = if title.is_empty() {
+            "保存文件".to_string()
+        } else {
+            title
+        };
+        let name = field_of(req, "name");
+        match save_file(&title, &name) {
+            Ok(path) => json!({ "ok": true, "path": path }).to_string().into_bytes(),
+            Err(e) if e == "cancelled" => json!({ "ok": false, "cancelled": true }).to_string().into_bytes(),
+            Err(e) => json!({ "ok": false, "error": e }).to_string().into_bytes(),
+        }
+    });
+    b.register_host_service("miy.app.pickFolder", |req| {        let title = field_of(req, "title");
         let title = if title.is_empty() {
             "选择文件夹".to_string()
         } else {
@@ -1601,8 +1616,60 @@ fn pick_file(title: &str) -> Result<String, String> {
     result
 }
 
-// ---- 单实例 ----------------------------------------------------------------
+/// 系统「另存为」对话框（`IFileSaveDialog`）。
+///
+/// 和 [`pick_file`] 的区别：这里允许输入一个**还不存在**的路径，所以导出整合包
+/// 时玩家能自己决定放哪、叫什么名字，而不是只能接受我们拼出来的文件名。
+fn save_file(title: &str, name: &str) -> Result<String, String> {
+    use windows::core::{HSTRING, PWSTR};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::{
+        FileSaveDialog, IFileSaveDialog, IShellItem, SIGDN_FILESYSPATH,
+    };
 
+    let did_init = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok() };
+    let result = (|| -> Result<String, String> {
+        unsafe {
+            let dialog: IFileSaveDialog =
+                CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER)
+                    .map_err(|e| format!("创建对话框失败：{e}"))?;
+            dialog
+                .SetTitle(&HSTRING::from(title))
+                .map_err(|e| format!("设置标题失败：{e}"))?;
+            if !name.is_empty() {
+                dialog
+                    .SetFileName(&HSTRING::from(name))
+                    .map_err(|e| format!("设置文件名失败：{e}"))?;
+            }
+            dialog
+                .SetDefaultExtension(&HSTRING::from("zip"))
+                .map_err(|e| format!("设置扩展名失败：{e}"))?;
+            let hwnd = windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow();
+            if dialog.Show(Some(hwnd)).is_err() {
+                return Err("cancelled".to_string());
+            }
+            let item: IShellItem = dialog.GetResult().map_err(|e| format!("拿结果失败：{e}"))?;
+            let pw: PWSTR = item
+                .GetDisplayName(SIGDN_FILESYSPATH)
+                .map_err(|e| format!("拿路径失败：{e}"))?;
+            let path = pw.to_string().unwrap_or_default();
+            CoTaskMemFree(Some(pw.0 as *const _));
+            if path.is_empty() {
+                return Err("cancelled".to_string());
+            }
+            Ok(path)
+        }
+    })();
+    if did_init {
+        unsafe { CoUninitialize() };
+    }
+    result
+}
+
+// ---- 单实例 ----------------------------------------------------------------
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }

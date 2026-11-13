@@ -5440,13 +5440,27 @@ fn service_export(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
     );
     zip.add("README.txt", readme.as_bytes())?;
 
-    let out_dir = std::path::Path::new(&root).join("exports");
-    std::fs::create_dir_all(&out_dir).map_err(|e| format!("无法创建导出目录：{e}"))?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let out = out_dir.join(format!("{id}-{stamp}.zip"));
+    // 玩家在「另存为」里挑过路径就用他的，否则落到 <游戏目录>\exports。
+    let out = match field(req, "dest").map(str::trim).filter(|s| !s.is_empty()) {
+        Some(dest) => {
+            let p = std::path::PathBuf::from(dest);
+            if let Some(dir) = p.parent() {
+                if !dir.as_os_str().is_empty() {
+                    std::fs::create_dir_all(dir).map_err(|e| format!("无法创建导出目录：{e}"))?;
+                }
+            }
+            p
+        }
+        None => {
+            let out_dir = std::path::Path::new(&root).join("exports");
+            std::fs::create_dir_all(&out_dir).map_err(|e| format!("无法创建导出目录：{e}"))?;
+            out_dir.join(format!("{id}-{stamp}.zip"))
+        }
+    };
     std::fs::write(&out, zip.finish()).map_err(|e| format!("无法写入整合包：{e}"))?;
     task_finish(task, true, "");
     Ok(serde_json::to_vec(&json!({

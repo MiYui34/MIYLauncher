@@ -329,6 +329,7 @@
   </div>
   <div class="acts">
     <button class="primary" id="exgo">导出整合包</button>
+    <button class="quiet" id="exsave">另存为…</button>
     <button class="quiet" id="exopen" disabled>打开所在文件夹</button>
   </div>
 </div>
@@ -372,6 +373,7 @@
   let info = null;
   let busy = false;
   let exportPath = "";
+  let exportDest = "";
 
   function log(msg, kind) {
     $("#status").textContent = msg || "";
@@ -965,11 +967,13 @@
       .map(i => i.dataset.file);
   }
 
-  $("#exgo").onclick = async () => {
+  async function doExport(dest) {
     if (!name || busy) return;
     busy = true;
     const b = $("#exgo");
+    const s = $("#exsave");
     b.disabled = true;
+    s.disabled = true;
     b.textContent = "正在导出…";
     log("正在打包整合包…", "busy");
     try {
@@ -978,6 +982,7 @@
         config: $("#exConfig").checked,
         options: $("#exOptions").checked,
       };
+      if (dest) req.dest = dest;
       // 清单没读到时不要传空数组（那等于「一个都不导」），交给后端全导。
       if (exData) {
         req.mods = exPick("mods");
@@ -999,8 +1004,26 @@
     } finally {
       busy = false;
       b.disabled = false;
+      s.disabled = false;
       b.textContent = "导出整合包";
     }
+  }
+  $("#exgo").onclick = () => doExport("");
+  // 「另存为」：先让玩家挑路径，再按那个路径导出。
+  $("#exsave").onclick = async () => {
+    if (!name || busy) return;
+    let r = null;
+    try {
+      r = await miy.call("miy.app.saveFile",
+        { title: "导出整合包", name: name + ".zip" }, 120000);
+    } catch (e) { r = null; }
+    if (!r || !r.ok) {
+      if (r && !r.cancelled) log((r && r.error) || "打不开保存对话框。", "bad");
+      return;
+    }
+    exportDest = r.path || "";
+    $("#expath").textContent = exportDest;
+    await doExport(exportDest);
   };
   $("#exopen").onclick = () => {
     if (!exportPath) return;
