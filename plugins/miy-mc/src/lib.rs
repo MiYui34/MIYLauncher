@@ -6581,6 +6581,11 @@ fn service_mods_search(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
                 "desc": p.get("description").and_then(Value::as_str).unwrap_or(""),
                 "downloads": p.get("downloads").and_then(Value::as_u64).unwrap_or(0),
                 "icon": p.get("icon_url").and_then(Value::as_str).unwrap_or(""),
+                "source": "modrinth",
+                "updated": p.get("date_modified").and_then(Value::as_str).unwrap_or(""),
+                "tags": p.get("categories").and_then(Value::as_array).map(|a| {
+                    a.iter().filter_map(Value::as_str).take(3).collect::<Vec<_>>()
+                }).unwrap_or_default(),
             }))
         })
         .collect();
@@ -7096,6 +7101,13 @@ fn service_cf_search(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
                 "downloads": m.get("downloadCount").and_then(Value::as_u64).unwrap_or(0),
                 "icon": logo,
                 "source": "curseforge",
+                "updated": m.get("dateModified").and_then(Value::as_str).unwrap_or(""),
+                "tags": m.get("categories").and_then(Value::as_array).map(|a| {
+                    a.iter()
+                        .filter_map(|c| c.get("name").and_then(Value::as_str))
+                        .take(3)
+                        .collect::<Vec<_>>()
+                }).unwrap_or_default(),
             })
         })
         .collect();

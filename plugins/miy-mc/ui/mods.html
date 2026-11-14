@@ -96,7 +96,7 @@
   .list{scrollbar-width:none}
   .list::-webkit-scrollbar{width:0; height:0}
   .m{
-    display:flex; align-items:center; gap:14px; padding:12px 18px; min-height:60px;
+    display:flex; align-items:center; gap:14px; padding:11px 18px; min-height:64px;
     border-bottom:1px solid #eef0f6; animation:rowIn var(--d-long) var(--ease-dec) both;
     cursor:pointer;
   }
@@ -117,6 +117,14 @@
     color:var(--on-var); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   }
   .m .n{color:var(--on-var); font-size:11.5px; white-space:nowrap; flex:0 0 auto}
+  .m .raw{margin-left:8px; font-size:11.5px; font-weight:400; color:var(--on-var)}
+  .m .tags{display:flex; gap:4px; margin-top:3px; flex-wrap:wrap}
+  .m .tag{font-size:10.5px; color:var(--on-var); background:var(--low); border-radius:4px; padding:1px 5px}
+  .m .right{display:flex; flex-direction:column; align-items:flex-end; gap:2px; flex:0 0 auto; min-width:92px}
+  .m .src{font-size:10.5px; font-weight:600; border-radius:4px; padding:1px 5px}
+  .m .src.mr{color:#0b6b3a; background:#d7f5e3}
+  .m .src.cf{color:#8a4b00; background:#ffe9cc}
+  .m .when{font-size:11px; color:var(--on-var)}
   /* 「安装」被挤成两行的根因：按钮默认 flex-shrink:1 且不禁止换行 */
   .m .go{
     height:32px; padding:0 16px; font-size:12.5px; border-radius:16px;
@@ -462,7 +470,40 @@
     searchFromFirst();
   });
 
-  const num = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(0) + "k" : String(n || 0);
+  /* PCL2 的下载量写法：过亿用「亿」，过十万用「万」，其余原样。 */
+  const num = n => {
+    n = Number(n) || 0;
+    if (n > 100000000) return (Math.round(n / 1000000) / 100) + " 亿";
+    if (n > 100000) return Math.floor(n / 10000) + " 万";
+    return String(n);
+  };
+  /* PCL2 的更新时间写法：刚刚 / N 分钟前 / N 小时前 / N 天前 / N 个月前 / N 年前。 */
+  function fmtTime(iso) {
+    if (!iso) return "";
+    const t = Date.parse(iso);
+    if (!t) return "";
+    const s = Math.max(0, (Date.now() - t) / 1000);
+    if (s < 60) return "刚刚";
+    if (s < 3600) return Math.floor(s / 60) + " 分钟前";
+    if (s < 86400) return Math.floor(s / 3600) + " 小时前";
+    if (s < 86400 * 30) return Math.floor(s / 86400) + " 天前";
+    if (s < 86400 * 365) return Math.floor(s / (86400 * 30)) + " 个月前";
+    return Math.floor(s / (86400 * 365)) + " 年前";
+  }
+  /* PCL2 的排序权重：模组优先 Modrinth（×5），CurseForge 记 1。
+     没有关键词时按「下载量 × 权重」排；有关键词时再叠一个文本匹配分。 */
+  function score(h, q) {
+    const w = h.source === "curseforge" ? 1 : 5;
+    const dl = Math.max(Number(h.downloads) || 0, 1);
+    let s = Math.log10(dl * w) / 9;
+    if (q) {
+      const k = q.toLowerCase();
+      const t = String(h.title || "").toLowerCase();
+      const d = String(h.desc || "").toLowerCase();
+      s += t === k ? 1 : t.includes(k) ? 0.8 : d.includes(k) ? 0.4 : 0;
+    }
+    return s;
+  }
   const kb = n => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
 
   /* 加载动画：先铺骨架行，再来真数据 */
@@ -496,6 +537,8 @@
     el.append(img);
   }
 
+  /* 一行模组的排版照 PCL2 的 MyResourceItem：
+     图标 / 标题（中文名）+ 原名 / 标签 / 简介，右侧一列放来源、更新时间、下载量。 */
   function row(h, i) {
     const row = document.createElement("div");
     row.className = "m";
@@ -504,28 +547,55 @@
     const ic = document.createElement("div");
     ic.className = "ic";
     iconInto(ic, h.title, h.icon);
+
     const left = document.createElement("div");
     left.className = "left";
+
     const t = document.createElement("div");
     t.className = "t";
-    t.textContent = h.title;
-    // 常见模组补一个中文名，方便中文玩家认。
-    if (h.zh && h.zh !== h.title) {
-      const z = document.createElement("span");
-      z.className = "zh";
-      z.textContent = h.zh;
-      t.append(z);
+    const zh = h.zh && h.zh !== h.title ? h.zh : "";
+    t.textContent = zh || h.title;
+    // 有中文名时把原名放成副标题，和 PCL2 一样两行都看得到。
+    if (zh) {
+      const raw = document.createElement("span");
+      raw.className = "raw";
+      raw.textContent = h.title;
+      t.append(raw);
     }
+    left.append(t);
+
+    const tags = (h.tags || []).filter(Boolean).slice(0, 3);
+    if (tags.length) {
+      const tr = document.createElement("div");
+      tr.className = "tags";
+      for (const g of tags) {
+        const c = document.createElement("span");
+        c.className = "tag";
+        c.textContent = g;
+        tr.append(c);
+      }
+      left.append(tr);
+    }
+
     const d = document.createElement("div");
     d.className = "d";
     d.textContent = h.desc || "";
-    left.append(t, d);
+    left.append(d);
 
+    const right = document.createElement("div");
+    right.className = "right";
+    const src = document.createElement("span");
+    src.className = "src " + (h.source === "curseforge" ? "cf" : "mr");
+    src.textContent = h.source === "curseforge" ? "CurseForge" : "Modrinth";
+    const when = document.createElement("span");
+    when.className = "when";
+    when.textContent = fmtTime(h.updated);
     const n = document.createElement("span");
     n.className = "n";
-    n.textContent = num(h.downloads) + " 次下载";
+    n.textContent = num(h.downloads);
+    right.append(src, when, n);
 
-    row.append(ic, left, n);
+    row.append(ic, left, right);
     row.onclick = () => openDetail(h);
     if (i !== undefined) row.style.animationDelay = Math.min(i, 10) * 18 + "ms";
     return row;
@@ -867,13 +937,11 @@
       const partial = source === "all" && !(mr && cf);
       let hits = [];
       if (mr && cf) {
-        // 「全部来源」：两边各取一页，交替排开，总数相加。
+        // 「全部来源」：两边各取一页，去重后按 PCL2 的分数排序（不再交替排）。
         const a = mr.hits || [], c = cf.hits || [];
-        for (let i = 0; i < Math.max(a.length, c.length); i++) {
-          if (a[i]) hits.push(a[i]);
-          if (c[i]) hits.push(c[i]);
-        }
-        hits = dedupe(hits).slice(0, PAGE);
+        hits = dedupe(a.concat(c));
+        hits.sort((x, y) => score(y, q) - score(x, q) || (y.downloads || 0) - (x.downloads || 0));
+        hits = hits.slice(0, PAGE);
       } else {
         hits = ((mr || cf || {}).hits) || [];
       }
