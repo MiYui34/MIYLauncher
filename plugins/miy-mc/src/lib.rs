@@ -313,6 +313,9 @@ struct Task {
     done: u64,
     total: u64,
     bytes: u64,
+    /// 单文件任务的"总字节数"。有它进度条才能按字节走，
+    /// 否则一个 40 MB 的模组在下载期间会一直显示 0%。
+    total_bytes: u64,
     started: u64,
     error: String,
     /// 取消请求：下载线程每轮都看一眼，看到就收工。
@@ -348,6 +351,7 @@ fn task_new(kind: &'static str, title: &str, total: u64) -> (u64, Arc<AtomicBool
             done: 0,
             total,
             bytes: 0,
+            total_bytes: 0,
             started: now_secs(),
             error: String::new(),
             cancel: Arc::clone(&cancel),
@@ -360,6 +364,15 @@ fn task_new(kind: &'static str, title: &str, total: u64) -> (u64, Arc<AtomicBool
         }
     }
     (id, cancel)
+}
+
+/// 告诉任务"这个文件一共多少字节"，进度条才能按字节算。
+fn task_size(id: u64, bytes: u64) {
+    if let Ok(mut v) = TASKS.lock() {
+        if let Some(t) = v.iter_mut().find(|t| t.id == id) {
+            t.total_bytes = bytes;
+        }
+    }
 }
 
 fn task_progress(id: u64, done: u64, bytes: u64) {
@@ -456,7 +469,10 @@ fn tasks_json() -> String {
                 out.push(',');
             }
             // 百分比在插件里算好：界面只管画，不重复推一遍算术。
-            let percent = if t.total > 0 {
+            // 单文件任务按字节算（下载过程中 done 一直是 0），多文件任务按文件数算。
+            let percent = if t.total_bytes > 0 {
+                ((t.bytes.min(t.total_bytes) * 1000) / t.total_bytes) as u32
+            } else if t.total > 0 {
                 ((t.done.min(t.total) * 1000) / t.total) as u32
             } else {
                 0
@@ -470,6 +486,7 @@ fn tasks_json() -> String {
                     "done": t.done,
                     "total": t.total,
                     "bytes": t.bytes,
+                    "totalBytes": t.total_bytes,
                     "percent": percent,
                     "cancellable": t.state == "running",
                     "started": t.started,
@@ -1570,12 +1587,19 @@ fn download_cancellable(
     path: &str,
     size: u64,
     cancel: &AtomicBool,
+    task: u64,
 ) -> Result<u64, String> {
     if cancel.load(Ordering::SeqCst) {
         return Err("已取消".into());
     }
     let job = dl::Job::with_sources(urls.to_vec(), path, size, None);
-    let rep = dl::run(h, vec![job], 8, Some(cancel), &|_, _| {}, &|_| {});
+    // 每 250 ms 把已下字节写回任务：界面上的百分比就是靠这个动的。
+    let tick = |done: u64, _total: u64| {
+        if task != 0 {
+            task_progress(task, 0, done);
+        }
+    };
+    let rep = dl::run(h, vec![job], 8, Some(cancel), &tick, &|_| {});
     if rep.cancelled || cancel.load(Ordering::SeqCst) {
         return Err("已取消".into());
     }
@@ -6667,7 +6691,8 @@ fn service_mods_install(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
         .filter(|s| !s.is_empty())
         .unwrap_or(fname);
     let (task, cancel) = task_new("mod", title, 1);
-    let bytes = match download_cancellable(h, &modrinth_urls(furl), &path, fsize, &cancel) {
+    task_size(task, fsize);
+    let bytes = match download_cancellable(h, &modrinth_urls(furl), &path, fsize, &cancel, task) {
         Ok(n) => n,
         Err(e) if e == "已取消" => {
             task_cancelled(task, "已取消，本次下载的文件已清理");
@@ -7119,7 +7144,8 @@ fn service_cf_install(h: &MiyHostV1, req: &Value) -> Result<Vec<u8>, String> {
         .filter(|s| !s.is_empty())
         .unwrap_or(fname);
     let (task, cancel) = task_new("mod", title, 1);
-    let bytes = match download_cancellable(h, &modrinth_urls(furl), &path, fsize, &cancel) {
+    task_size(task, fsize);
+    let bytes = match download_cancellable(h, &modrinth_urls(furl), &path, fsize, &cancel, task) {
         Ok(n) => n,
         Err(e) if e == "已取消" => {
             task_cancelled(task, "已取消，本次下载的文件已清理");
@@ -7820,6 +7846,46 @@ pub extern "C" fn miy_plugin_entry_v1() -> *const MiyPluginV1 {
 #[allow(dead_code)]
 fn _cache_hint() -> HashMap<String, Value> {
     HashMap::new()
+}
+
+#[cfg(test)]
+mod task_tests {
+    use super::*;
+
+    /// 单文件任务必须按字节算百分比：下载期间 done 一直是 0，
+    /// 只看 done/total 的话进度条会一直停在 0%。
+    #[test]
+    fn single_file_task_reports_byte_percent() {
+        let (id, _cancel) = task_new("mod", "测试模组", 1);
+        task_size(id, 1000);
+        task_progress(id, 0, 250);
+        let v: Value = serde_json::from_slice(&tasks_json().into_bytes()).unwrap();
+        let t = v["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"].as_u64() == Some(id))
+            .unwrap();
+        assert_eq!(t["percent"].as_u64(), Some(250));
+        assert_eq!(t["totalBytes"].as_u64(), Some(1000));
+        task_finish(id, true, "");
+    }
+
+    /// 多文件任务没有 totalBytes 时退回按文件数算。
+    #[test]
+    fn multi_file_task_falls_back_to_count() {
+        let (id, _cancel) = task_new("install", "测试安装", 4);
+        task_progress(id, 1, 10);
+        let v: Value = serde_json::from_slice(&tasks_json().into_bytes()).unwrap();
+        let t = v["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"].as_u64() == Some(id))
+            .unwrap();
+        assert_eq!(t["percent"].as_u64(), Some(250));
+        task_finish(id, true, "");
+    }
 }
 
 #[cfg(test)]

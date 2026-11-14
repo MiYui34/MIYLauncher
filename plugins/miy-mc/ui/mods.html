@@ -253,27 +253,6 @@
   .seg button{height:32px; padding:0 12px; border:none; background:transparent; border-radius:8px;
     font:inherit; font-size:13px; color:var(--on-var); cursor:pointer}
   .seg button.on{background:#fff; color:var(--on); box-shadow:var(--e1)}
-  .fab{
-    position:fixed; right:22px; bottom:22px; width:52px; height:52px; border-radius:16px;
-    background:var(--primary); color:#fff; border:none; box-shadow:0 8px 22px rgba(65,95,145,.34);
-    display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:600;
-    cursor:pointer; z-index:60;
-    opacity:0; transform:translateY(14px) scale(.86); pointer-events:none;
-    transition:opacity .18s var(--ease-dec), transform .24s var(--ease-dec), filter .15s linear;
-  }
-  .fab.on{opacity:1; transform:none; pointer-events:auto}
-  .fabpanel{position:fixed; right:22px; bottom:86px; width:280px; padding:12px 14px;
-    background:#fff; border-radius:16px; box-shadow:0 12px 32px rgba(25,28,32,.18);
-    border:1px solid #ececf4; z-index:40}
-  .fabpanel[hidden]{display:none}
-  .fp-head{font-size:13px; font-weight:600; margin-bottom:8px}
-  .fp-list{display:flex; flex-direction:column; gap:8px; max-height:220px; overflow:auto}
-  .fp-row{display:flex; align-items:center; gap:8px; font-size:12.5px}
-  .fp-nm{flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-  .fp-pct{color:var(--on-var); font-variant-numeric:tabular-nums}
-  .fp-empty{font-size:12.5px; color:var(--on-var)}
-  .fp-row button{height:28px; padding:0 10px; font-size:12px}
-  .fab:hover{filter:brightness(1.06)}
 </style>
 
 <div id="list-view" style="display:flex; flex-direction:column; flex:1 1 auto; min-height:0">
@@ -325,14 +304,6 @@
   <div class="mchips" id="dmcs"></div>
   <div class="list" id="dlist"></div>
 </div>
-
-<div class="fabpanel" id="fabpanel" hidden>
-  <div class="fp-head">正在下载</div>
-  <div class="fp-list" id="fplist"></div>
-</div>
-<button class="fab" id="fab" title="下载任务">
-  <span class="fab-n" id="fabn">0</span>
-</button>
 
 <script>
   const $ = s => document.querySelector(s);
@@ -560,76 +531,8 @@
     return row;
   }
 
-  let running = 0;
-  let pollTimer = 0;
-
-  function bumpFab() {
-    $("#fabn").textContent = String(running);
-    // 用 class 而不是 hidden：hidden 会让过渡直接失效，球是「啪」地出现。
-    $("#fab").classList.toggle("on", running > 0);
-    if (running > 0) startPoll(); else stopPoll();
-  }
-
-  /* 任务面板：列出正在跑的下载，每条带一个「取消」。 */
-  async function refreshTasks() {
-    let list = [];
-    try {
-      const r = await miy.call("miy.mc.tasks", {}, 8000);
-      list = ((r && r.tasks) || []).filter(t => t.state === "running" || t.state === "cancelling");
-    } catch (e) { list = []; }
-    const box = $("#fplist");
-    if (!box) return;
-    box.replaceChildren();
-    if (!list.length) {
-      box.append(Object.assign(document.createElement("div"),
-        { className: "fp-empty", textContent: "没有正在进行的下载。" }));
-      return;
-    }
-    for (const t of list) {
-      const row = document.createElement("div");
-      row.className = "fp-row";
-      const nm = document.createElement("div");
-      nm.className = "fp-nm";
-      nm.textContent = t.title || "下载任务";
-      const pct = document.createElement("div");
-      pct.className = "fp-pct";
-      pct.textContent = t.state === "cancelling" ? "正在取消…" : (t.percent || 0) + "%";
-      const b = document.createElement("button");
-      b.className = "quiet";
-      b.textContent = t.state === "cancelling" ? "取消中" : "取消";
-      b.disabled = t.state !== "running";
-      b.onclick = async () => {
-        b.disabled = true;
-        b.textContent = "取消中";
-        try { await miy.call("miy.mc.task.cancel", { id: t.id }, 15000); } catch (e) {}
-        refreshTasks();
-      };
-      row.append(nm, pct, b);
-      box.append(row);
-    }
-  }
-
-  function startPoll() {
-    if (pollTimer) return;
-    pollTimer = setInterval(() => { refreshTasks().catch(() => {}); }, 900);
-    refreshTasks().catch(() => {});
-  }
-  function stopPoll() {
-    if (!pollTimer) return;
-    clearInterval(pollTimer);
-    pollTimer = 0;
-  }
-
-  $("#fab").onclick = () => {
-    const p = $("#fabpanel");
-    p.hidden = !p.hidden;
-    if (!p.hidden) refreshTasks().catch(() => {});
-  };
-
   async function install(h, btn, vid) {
     if (btn) { btn.disabled = true; btn.textContent = "安装中"; }
-    running++;
-    bumpFab();
     log("正在安装 " + h.title + "…", "busy");
     try {
       const req = { id: h.id, mc: mcVersion, loader, target: customDir ? "" : curVersion };
@@ -652,9 +555,6 @@
     } catch (e) {
       if (btn) { btn.disabled = false; btn.textContent = "安装"; }
       log("安装没有完成，请稍后再试。", "bad");
-    } finally {
-      running = Math.max(0, running - 1);
-      bumpFab();
     }
   }
 

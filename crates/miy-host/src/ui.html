@@ -332,11 +332,13 @@ iframe.plugpage{
   position:fixed; right:22px; bottom:22px; width:52px; height:52px; border:0; border-radius:16px;
   background:var(--primary); color:var(--on-primary); cursor:pointer; z-index:70;
   display:grid; place-items:center; box-shadow:0 6px 18px rgba(65,95,145,.3);
-  transition:transform var(--d-short) var(--ease-std), filter var(--d-short) var(--ease-std);
+  opacity:0; transform:translateY(12px) scale(.9); pointer-events:none;
+  transition:opacity .18s var(--ease-dec), transform .24s var(--ease-dec),
+             filter var(--d-short) var(--ease-std);
 }
+.fab.on{opacity:1; transform:none; pointer-events:auto}
 .fab:hover{filter:brightness(1.06)}
 .fab:active{transform:scale(.94)}
-.fab[hidden]{display:none}
 .fab .badge{
   position:absolute; top:-5px; right:-5px; min-width:20px; height:20px; padding:0 5px;
   border-radius:10px; background:var(--error); color:var(--on-primary);
@@ -347,9 +349,19 @@ iframe.plugpage{
   position:fixed; right:22px; bottom:86px; width:340px; max-height:62vh; overflow:auto;
   background:var(--lowest); border-radius:16px; padding:8px 14px 12px; z-index:69;
   box-shadow:0 16px 40px rgba(16,24,40,.18), 0 2px 8px rgba(16,24,40,.08);
-  animation:rowIn var(--d-med) var(--ease-dec) both;
+  transform-origin:100% 100%;
+  animation:tasksIn var(--d-med) var(--ease-dec) both;
 }
+.tasks.out{animation:tasksOut .16s var(--ease-std) both}
 .tasks[hidden]{display:none}
+@keyframes tasksIn{
+  from{opacity:0; transform:translateY(10px) scale(.97)}
+  to{opacity:1; transform:none}
+}
+@keyframes tasksOut{
+  from{opacity:1; transform:none}
+  to{opacity:0; transform:translateY(8px) scale(.98)}
+}
 .tasks h4{font:500 13px/20px var(--font); color:var(--on-surface); padding:8px 0 6px}
 .tasks .empty{padding:16px 2px}
 .task{padding:10px 0; border-top:1px solid var(--high)}
@@ -1252,6 +1264,28 @@ function paintTasks(list, running) {
 }
 
 /** 轮询任务表：下载可能由任何页面发起，甚至发起它的页面已经不在了。 */
+/* 面板的进出场：hidden 是硬切，动画得靠 class + animationend。 */
+function showTasks(on) {
+  const box = $("#tasks");
+  if (on) {
+    box.classList.remove("out");
+    box.hidden = false;
+    box.style.animation = "none";
+    void box.offsetWidth;
+    box.style.animation = "";
+    return;
+  }
+  if (box.hidden) return;
+  const done = () => {
+    box.hidden = true;
+    box.classList.remove("out");
+  };
+  box.classList.add("out");
+  box.addEventListener("animationend", done, { once: true });
+  // 系统关了动画时 animationend 不会来，兜个底。
+  setTimeout(() => { if (!box.hidden && box.classList.contains("out")) done(); }, 260);
+}
+
 async function pollTasks() {
   let r = null;
   try {
@@ -1262,7 +1296,7 @@ async function pollTasks() {
   const fab = $("#fab");
   const badge = $("#fabbadge");
   if (!r || !r.ok) {
-    fab.hidden = true;
+    fab.classList.remove("on");
     return;
   }
   const list = r.tasks || [];
@@ -1270,8 +1304,9 @@ async function pollTasks() {
   // 只在真有任务在跑（或用户主动开着面板）时出现：任务一结束就收起，
   // 免得右下角常驻一个来路不明的按钮。
   const live = list.filter(x => x.state === "running" || x.state === "cancelling");
-  fab.hidden = live.length === 0 && !(taskOpen && list.length > 0);
-  if (fab.hidden) { taskOpen = false; $("#tasks").hidden = true; }
+  const show = live.length > 0 || (taskOpen && list.length > 0);
+  fab.classList.toggle("on", show);
+  if (!show) { taskOpen = false; showTasks(false); }
   badge.hidden = running === 0;
   // 只有一个任务时角标直接显示百分比，比一个 "1" 有用得多。
   badge.textContent = live.length === 1 ? taskPct(live[0]) + "%" : String(running);
@@ -1281,7 +1316,7 @@ async function pollTasks() {
 
 $("#fab").onclick = () => {
   taskOpen = !taskOpen;
-  $("#tasks").hidden = !taskOpen;
+  showTasks(taskOpen);
   if (taskOpen) pollTasks();
 };
 
