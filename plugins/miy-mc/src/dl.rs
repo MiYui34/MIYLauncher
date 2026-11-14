@@ -1015,6 +1015,10 @@ pub fn run(
                                 s.last_ms.store(now_ms(), Ordering::Relaxed);
                                 done_bytes.fetch_add(len, Ordering::Relaxed);
                                 note_ok(url);
+                                // 这个源能用：后面的块从它开始试，别每次都先撞一遍坏源。
+                                if !job.urls.is_empty() {
+                                    s.src.store((src + attempt) % job.urls.len(), Ordering::Relaxed);
+                                }
                                 // 记下这一块是哪个源给的，排障时一眼看出走的 CDN 还是镜像。
                                 if let Ok(mut src) = s.last_src.lock() {
                                     *src = host_of(url).to_string();
@@ -1061,12 +1065,11 @@ pub fn run(
                                     requeued = true;
                                     break;
                                 }
-                                // 还有别的源就换一个再试：4xx 对当前源是永久的，
-                                // 对下一个源未必（镜像没同步、官方有）。
-                                if job.urls.len() > 1 {
-                                    s.src.fetch_add(1, Ordering::Relaxed);
-                                }
-                                let fatal = !e.retryable() && job.urls.len() <= 1;
+                                // 换源靠 attempt 轮换（pick_url(urls, src + attempt)），
+                                // 这里不能再推进 src —— 两个都推进会跳回同一个源，
+                                // 表现就是对着一个 404 的地址重试到超时。
+                                // 每个候选源都试过一次、且都是永久错误，就别再耗了。
+                                let fatal = !e.retryable() && attempt + 1 >= job.urls.len();
                                 last = Some(e);
                                 if fatal {
                                     break;
@@ -1366,7 +1369,11 @@ mod tests {
         }
 
         let resp = if svc == "miy.net.download_range" {
-            if c.norange.load(Ordering::SeqCst) {
+            let url = v.get("url").and_then(Value::as_str).unwrap_or("");
+            if url.contains("bad") {
+                // 模拟"这个源上没有这个文件"：永久错误，换源才有救。
+                json!({"ok": false, "kind": "http", "status": 404, "error": "HTTP 404"})
+            } else if c.norange.load(Ordering::SeqCst) {
                 json!({"ok": false, "kind": "norange", "status": 200, "error": "服务器不支持分段下载"})
             } else if n <= c.rl_first.load(Ordering::SeqCst) {
                 json!({"ok": false, "kind": "http", "status": 429, "error": "HTTP 429"})
@@ -1570,6 +1577,50 @@ mod tests {
         assert!(rep.errors.is_empty());
         assert_eq!(rep.done, 1);
         assert_eq!(c.calls.load(Ordering::SeqCst), 0);
+    }
+
+    /// 第一个源 404、第二个源正常：必须换源成功。
+    /// 以前 `src` 和 `attempt` 同时推进，两个候选会互相抵消、一直撞同一个坏源。
+    #[test]
+    fn permanent_404_moves_to_next_source() {
+        let d = tmpdir("src404");
+        let src = d.join("src.bin");
+        let data = vec![7u8; 300 << 10];
+        std::fs::write(&src, &data).unwrap();
+        let c = ctx(&src);
+        let h = host(&c);
+        let out = d.join("out.bin");
+        let jobs = vec![Job {
+            urls: vec!["http://bad.test/x".into(), "http://good.test/x".into()],
+            path: out.to_string_lossy().into(),
+            size: data.len() as u64,
+            sha1: None,
+        }];
+        let rep = run(&h, jobs, 2, None, &|_, _| {}, &|_| {});
+        assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+        assert_eq!(std::fs::read(&out).unwrap(), data);
+    }
+
+    /// 所有源都 404：每个源试一次就认输，别退避重试到几分钟。
+    #[test]
+    fn all_sources_404_fails_fast() {
+        let d = tmpdir("all404");
+        let src = d.join("src.bin");
+        std::fs::write(&src, vec![1u8; 300 << 10]).unwrap();
+        let c = ctx(&src);
+        let h = host(&c);
+        let out = d.join("out.bin");
+        let jobs = vec![Job {
+            urls: vec!["http://bad1.test/x".into(), "http://bad2.test/x".into()],
+            path: out.to_string_lossy().into(),
+            size: 300 << 10,
+            sha1: None,
+        }];
+        let rep = run(&h, jobs, 2, None, &|_, _| {}, &|_| {});
+        assert!(!rep.errors.is_empty());
+        assert!(rep.errors[0].contains("404"), "{:?}", rep.errors);
+        // 两个源各试一次，不该有 8 次退避重试。
+        assert!(c.calls.load(Ordering::SeqCst) <= 4, "calls={}", c.calls.load(Ordering::SeqCst));
     }
 
     #[test]

@@ -1615,8 +1615,14 @@ fn modrinth_urls(url: &str) -> Vec<String> {
     if let Some(rest) = url.strip_prefix("https://cdn.modrinth.com") {
         v.push(format!("{MCIM}{rest}"));
     }
-    // CurseForge 的文件 CDN 同理（`mediafilez.forgecdn.net` 不在镜像范围内，别一起换）。
+    // CurseForge 有两个文件 CDN：`edge` 与 `mediafilez`。同一个文件常常只在其中一个上
+    // （实测 appleskin 在 edge 上 404、mediafilez 上 206），所以两个都要试。
     if let Some(rest) = url.strip_prefix("https://edge.forgecdn.net") {
+        v.push(format!("https://mediafilez.forgecdn.net{rest}"));
+        v.push(format!("{MCIM}{rest}"));
+    }
+    if let Some(rest) = url.strip_prefix("https://mediafilez.forgecdn.net") {
+        v.push(format!("https://edge.forgecdn.net{rest}"));
         v.push(format!("{MCIM}{rest}"));
     }
     v
@@ -8077,26 +8083,24 @@ mod source_tests {
         assert!(c.iter().any(|u| is_site(u)));
     }
 
-    /// `edge.forgecdn.net` 有镜像，`mediafilez.forgecdn.net` 没有（MCIM 文档明确说了）。
+    /// CurseForge 的两个文件 CDN 互为兜底：同一个文件常常只在其中一个上
+    /// （实测 appleskin 在 edge 上 404、mediafilez 上 206），所以两个都要试。
     #[test]
-    fn forgecdn_mirrors_but_mediafilez_does_not() {
-        let a = candidates_for(&item("https://edge.forgecdn.net/files/1234/5678/sodium.jar"));
-        assert!(a
-            .iter()
-            .any(|u| u == &format!("{MCIM}/files/1234/5678/sodium.jar")));
-        let b = candidates_for(&item("https://mediafilez.forgecdn.net/files/1234/5678/x.jar"));
-        assert!(!b.iter().any(|u| u.starts_with(MCIM)));
-        // 模组安装走的是 modrinth_urls，两条 CDN 都要有镜像兜底。
-        assert!(modrinth_urls("https://edge.forgecdn.net/files/1234/5678/sodium.jar")
-            .iter()
-            .any(|u| u == &format!("{MCIM}/files/1234/5678/sodium.jar")));
-        assert!(modrinth_urls("https://cdn.modrinth.com/data/abc/versions/1/x.jar")
-            .iter()
-            .any(|u| u == &format!("{MCIM}/data/abc/versions/1/x.jar")));
-        assert_eq!(
-            modrinth_urls("https://mediafilez.forgecdn.net/files/1/2/x.jar").len(),
-            1
-        );
+    fn forgecdn_hosts_fall_back_to_each_other() {
+        let a = modrinth_urls("https://edge.forgecdn.net/files/1234/5678/sodium.jar");
+        assert_eq!(a[0], "https://edge.forgecdn.net/files/1234/5678/sodium.jar");
+        assert!(a.contains(&"https://mediafilez.forgecdn.net/files/1234/5678/sodium.jar".to_string()));
+        assert!(a.contains(&format!("{MCIM}/files/1234/5678/sodium.jar")));
+
+        let b = modrinth_urls("https://mediafilez.forgecdn.net/files/1234/5678/x.jar");
+        assert_eq!(b[0], "https://mediafilez.forgecdn.net/files/1234/5678/x.jar");
+        assert!(b.contains(&"https://edge.forgecdn.net/files/1234/5678/x.jar".to_string()));
+        assert!(b.contains(&format!("{MCIM}/files/1234/5678/x.jar")));
+
+        // Modrinth 的 CDN 仍然只加 MCIM 一条。
+        let c = modrinth_urls("https://cdn.modrinth.com/data/EsAfCjCV/versions/PHjDtQay/a.jar");
+        assert_eq!(c.len(), 2);
+        assert!(c[1].starts_with(MCIM));
     }
 
     /// 原版资源只走 BMCLAPI，模组接口只走 MCIM：两个 base 不能串。
